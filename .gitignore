@@ -1,0 +1,30 @@
+# 本地依赖、产物及工具缓存
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.codegraph/
+.aoci/
+# 运行数据和秘密不得提交
+.env
+.env.*
+!.env.example
+secrets/
+backups/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
+*.key
+*.pem
+# 编辑器与主机配置
+.vscode/
+.idea/
+.codex/config.toml
+.DS_Store
+Thumbs.db
