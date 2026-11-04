@@ -1,0 +1,28 @@
+export const translations = {
+  zh: {devices: '设备工作台', automation: '自动化', session: '当前会话', language: '界面语言', theme: '切换主题', light: '浅色', dark: '深色',
+    signedOut: '尚未登录', lastKnown: '最近读取', login: '登录', logout: '退出登录', username: '用户名', password: '密码', signingIn: '正在验证…',
+    loginTitle: '登录工作台', loginHint: '使用本站点的人员账户登录。', config: '本站点尚未配置，无法登录。', secure: '需要通过本站点的 HTTPS 入口登录。',
+    refresh: '刷新', busy: '处理中…', notice: '服务尚未就绪 · 当前仅提供身份与设备读取。', list: '设备', empty: '没有已登记设备', unread: '尚未读取设备目录', choose: '选择设备查看状态',
+    logicalId: '逻辑标识', connection: '连接状态', mode: '控制模式', holder: '当前持有人', gate: '操作闸门', version: '控制版本', inFlight: '在途命令', unresolved: '未决命令',
+    none: '无', unknown: '尚未读取', automatic: '自动化', manual: '手动', disconnected: '未连接', connecting: '连接中', ready: '就绪', faulted: '故障', protected: '保护中', fencing: '屏障处理中',
+    observation: '设备观察', noObservation: '尚无有效设备观察。', readOnly: '最后一次读取结果；不会自动操作设备。', noAutomation: '未配置自动化服务', noAutomationHint: '当前为独立 Controller 工作台。',
+    issuer: '签发方', issuerEpoch: '签发方世代', principal: '主体标识', sessionId: '会话标识', authRevision: '授权修订', expires: '会话有效至', permissions: '当前权限', renew: '续期会话',
+    renewHint: '显式续期会更新凭据并清除设备视图，需要重新读取。', lastRead: '读取时间', catalog: '目录修订',
+    unauthorized: '会话已失效，请重新登录。', forbidden: '当前账户没有读取此内容的权限。', unavailable: '服务暂不可用，未自动重试。',
+    incompatible: '响应或服务身份不兼容，已停止本次读取。', network: '请求未能安全完成，请重新登录；不会自动重试。', stale: '目录已变化或不完整，请手动重新读取。',
+    logout_pending: '本地会话已撤销；远端撤销传播仍待确认。', logout_unconfirmed: '已清除本页凭据；服务端退出结果尚未确认。', local_cleared: '已清除本页凭据，未执行服务端注销。'},
+  en: {devices: 'Device workspace', automation: 'Automation', session: 'Current session', language: 'Interface language', theme: 'Switch theme', light: 'Light', dark: 'Dark',
+    signedOut: 'Signed out', lastKnown: 'Last read', login: 'Sign in', logout: 'Sign out', username: 'Username', password: 'Password', signingIn: 'Verifying…',
+    loginTitle: 'Sign in to your workspace', loginHint: 'Use your personal account for this site.', config: 'This site is not configured. Sign-in is unavailable.', secure: 'Use this site’s HTTPS entry point to sign in.',
+    refresh: 'Refresh', busy: 'Working…', notice: 'Service not ready · Identity and device reads are available only.', list: 'Devices', empty: 'No registered devices', unread: 'Device catalog not read', choose: 'Select a device to view its state',
+    logicalId: 'Logical ID', connection: 'Connection', mode: 'Control mode', holder: 'Current holder', gate: 'Operation gate', version: 'Control version', inFlight: 'In-flight commands', unresolved: 'Unresolved commands',
+    none: 'None', unknown: 'Not read', automatic: 'Automatic', manual: 'Manual', disconnected: 'Disconnected', connecting: 'Connecting', ready: 'Ready', faulted: 'Faulted', protected: 'Protected', fencing: 'Fencing',
+    observation: 'Device observation', noObservation: 'No valid device observation is available.', readOnly: 'Last read result. Devices are never operated automatically.', noAutomation: 'Automation service not configured', noAutomationHint: 'This is a standalone Controller workspace.',
+    issuer: 'Issuer', issuerEpoch: 'Issuer epoch', principal: 'Principal ID', sessionId: 'Session ID', authRevision: 'Authorization revision', expires: 'Session valid until', permissions: 'Current permissions', renew: 'Renew session',
+    renewHint: 'Explicit renewal rotates credentials and clears device views. Read them again when needed.', lastRead: 'Read at', catalog: 'Catalog revision',
+    unauthorized: 'Your session is no longer valid. Sign in again.', forbidden: 'Your account does not have permission to read this content.', unavailable: 'Service unavailable. No automatic retry was made.',
+    incompatible: 'The response or service identity is incompatible. This read has stopped.', network: 'The request could not complete safely. Sign in again. No automatic retry was made.', stale: 'The catalog changed or is incomplete. Refresh it manually.',
+    logout_pending: 'The local session was revoked. Remote revocation propagation is still unconfirmed.', logout_unconfirmed: 'Page credentials were cleared. Server-side sign-out is unconfirmed.', local_cleared: 'Page credentials were cleared. No server-side sign-out was performed.'},
+} as const;
+export type Language = keyof typeof translations;
+export type Copy = {[K in keyof typeof translations.zh]: string};
