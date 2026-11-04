@@ -34,6 +34,7 @@ const licenses = await Promise.all(['react', 'react-dom', 'scheduler'].map(async
   const directory = path.dirname(fileURLToPath(import.meta.resolve(name)));
   return name + '\n\n' + await fs.readFile(path.join(directory, 'LICENSE'), 'utf8');
 }));
+licenses.push(await fs.readFile(new URL('THIRD_PARTY_LICENSES.txt', sdkRoot), 'utf8'));
 await fs.writeFile(path.join(output, 'THIRD-PARTY-LICENSES.txt'), licenses.join('\n\n'));
 const artifacts = {};
 for (const entry of await fs.readdir(output, {recursive: true, withFileTypes: true})) {
