@@ -42,6 +42,10 @@ npm run build
 
 `test/command-browser-check.mjs`验证真实HTTPS登录、令牌与不存在命令查询，以及合成命令成功响应的SDK解码、null时间展示、固定修订证据分页、双语／主题、1440与390像素布局和错误响应后的清理。成功命令与证据通过显式测试路由提供，不证明实际设备执行或完整命令集成。产物位于忽略的`logs/gui-command`；主动注入的错误与意外控制台错误分别记录。两个浏览器脚本均按`node <脚本> <Playwright模块入口> <浏览器可执行文件>`调用，浏览器驱动不使用`--disallow-code-generation-from-strings`；该参数会使当前Playwright的页面读取失效。产品运行参数不因此改变。
 
+`test/controller-command-browser-check.mjs`由Suite的同设备双命令用例驱动，连接同一受监督Controller进程的实际HTTPS和SQLite记录。浏览器不拦截请求：两条模拟器命令的第5修订、完整记录摘要、完成／释放证据及其快照引用须与实际执行原件一致；服务端撤销证据权限后，再次读取返回403并清除旧证据。1440像素中文浅色和390像素英文深色页面均已验证，结果保存到忽略的`logs/gui-execution`。这是固定内存模拟器到浏览器的完整读取验证，不是实际设备或生产部署验收。
+
+运行该集成时，在Suite现有`controller-materialization.integration.mjs`双命令用例上显式提供`LEAFSEAMER_GUI_TEST_ROOT`、`LEAFSEAMER_PLAYWRIGHT_MODULE`和`LEAFSEAMER_BROWSER_EXECUTABLE`三个绝对路径，另按Suite要求指定`LEAFSEAMER_CONTROLLER_TEST_ROOT`。测试名称以`_dispatch_closure_cleanup_successor`结尾。Suite先构建绑定临时业务库身份的GUI，再运行模拟器和浏览器；不要同时运行其它会覆盖GUI构建目录的任务。
+
 上述浏览器成功使用合成环境批准、账户和设备，不代表平台批准、真实设备、正式部署或完整 UIT01—UIT40 验收。当前 SDK 完整静态校验器使脚本约7.9 MB，窄带首次加载尚待优化和验收。完整范围与退出条件见 Suite 的整体完成清单。
 
 许可见 [LICENSE](LICENSE) 和 [第三方许可](THIRD_PARTY_NOTICES.md)。
