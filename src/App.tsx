@@ -3,11 +3,12 @@ import type {FormEvent, ReactNode} from 'react';
 import type {SessionManager, Site, Snapshot} from './session.ts';
 import {translations} from './i18n.ts';
 import type {Language, Copy} from './i18n.ts';
+import {CommandPane} from './CommandPane.tsx';
 
-type Tab = 'devices' | 'automation' | 'session';
+type Tab = 'devices' | 'commands' | 'automation' | 'session';
 function Icon({name}: {name: Tab | 'alert'}) {
   const paths = {devices: 'M3 4h18v13H3z M8 21h8 M12 17v4', automation: 'M12 3v6 M5 15v-4h14v4 M5 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M19 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6 M12 3a2 2 0 1 0 0 4a2 2 0 1 0 0-4',
-    session: 'M3 4h18v14h-9l-5 4v-4H3z', alert: 'M12 7v6 M12 17h.01 M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20'};
+    commands: 'M5 3h14v18H5z M8 8h8 M8 12h8 M8 16h5', session: 'M3 4h18v14h-9l-5 4v-4H3z', alert: 'M12 7v6 M12 17h.01 M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20'};
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]}/></svg>;
 }
 function preference(key: string, fallback: string) { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
@@ -56,7 +57,7 @@ function SessionPane({manager, state, copy}: {manager: SessionManager; state: Sn
       [copy.sessionId, session.session_id], [copy.authRevision, session.authorization_revision], [copy.expires, session.validity.not_after],
       [copy.permissions, <ul className="permission-list">{session.permissions.map(p => <li key={p}>{p}</li>)}</ul>]]}/></>;
 }
-const fallback: Snapshot = Object.freeze({busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, lastRead: null, catalogRevision: null, notice: null});
+const fallback: Snapshot = Object.freeze({busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
 const noopSubscribe = () => () => {}, fallbackSnapshot = () => fallback;
 export default function App({site, manager}: {site: Site | null; manager: SessionManager | null}) {
   const state = useSyncExternalStore(manager?.subscribe ?? noopSubscribe, manager?.getSnapshot ?? fallbackSnapshot);
@@ -68,7 +69,7 @@ export default function App({site, manager}: {site: Site | null; manager: Sessio
   const changeLanguage = (value: Language) => { setLanguage(value); savePreference('leafseamer.language', value); document.documentElement.lang = value === 'zh' ? 'zh-CN' : 'en'; };
   const changeTheme = () => { const value = theme === 'light' ? 'dark' : 'light'; setTheme(value); savePreference('leafseamer.theme', value); };
   return <div className="app" data-theme={theme}><aside className="rail"><div className="wordmark">LeafSeamer</div>
-    <nav aria-label="LeafSeamer">{(['devices','automation','session'] as const).map(id => <button key={id} className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined}
+    <nav aria-label="LeafSeamer">{(['devices','commands','automation','session'] as const).map(id => <button key={id} className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined}
       onClick={() => setTab(id)}><Icon name={id}/><span>{copy[id]}</span></button>)}</nav>
     <div className="preferences"><div role="group" aria-label={copy.language}><button onClick={() => changeLanguage('zh')} aria-pressed={language === 'zh'}>简体中文</button><span>/</span><button onClick={() => changeLanguage('en')} aria-pressed={language === 'en'}>English</button></div>
       <button onClick={changeTheme} aria-label={copy.theme}>{theme === 'light' ? copy.light : copy.dark}</button></div>
@@ -77,6 +78,7 @@ export default function App({site, manager}: {site: Site | null; manager: Sessio
     <main>{state.notice && <p role="alert" className="notice">{copy[state.notice]}</p>}
       {!state.session || !manager ? <LoginPane manager={manager} state={state} copy={copy} reason={!site?.service_id ? copy.config : location.protocol !== 'https:' ? copy.secure : null}/> :
         tab === 'devices' ? <DevicePane manager={manager} state={state} copy={copy} language={language}/> :
+        tab === 'commands' ? <CommandPane manager={manager} state={state} copy={copy} language={language}/> :
         tab === 'session' ? <SessionPane manager={manager} state={state} copy={copy}/> :
         <section className="empty-service"><h1>{copy.noAutomation}</h1><p className="muted">{copy.noAutomationHint}</p></section>}
     </main>

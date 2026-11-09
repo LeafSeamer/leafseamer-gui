@@ -4,16 +4,18 @@ import type {BrowserSessionClient, Results} from '@leafseamer/sdk';
 export type Session = Extract<Results['controller']['login'], {status: '201'}>['body']['data'];
 export type Device = Extract<Results['controller']['listDevices'], {status: '200'}>['body']['data']['items'][number];
 export type Control = Extract<Results['controller']['getControl'], {status: '200'}>['body'];
+export type Command = Extract<Results['controller']['getCommand'], {status: '200'}>['body']['record'];
+export type EvidencePage = Extract<Results['controller']['getCommandEvidence'], {status: '200'}>['body'];
 export type Site = {format: 'leafseamer.gui.site/1'; site_label: string; service_id: string | null; database_instance_id: string | null; selection: typeof contractSelection};
-export type Notice = 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
+export type Notice = 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
 export type Snapshot = Readonly<{busy: boolean; session: Session | null; loginLabel: string; devices: readonly Device[]; selected: string | null;
-  control: Control | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
+  control: Control | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
 const empty = (): Snapshot => Object.freeze({busy: false, session: null, loginLabel: '', devices: Object.freeze([]), selected: null,
-  control: null, catalogRevision: null, lastRead: null, notice: null});
+  control: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
 class Rejected extends Error { code: Notice; constructor(code: Notice) { super(code); this.code = code; } }
 function accept(status: string, expected: string): void {
   if (status === expected) return;
-  throw new Rejected(status === '401' ? 'unauthorized' : status === '403' ? 'forbidden' : status === '409' ? 'stale' :
+  throw new Rejected(status === '401' ? 'unauthorized' : status === '403' ? 'forbidden' : status === '404' ? 'not_found' : status === '410' ? 'expired_view' : status === '409' ? 'stale' :
     ['400','406','415','422'].includes(status) ? 'incompatible' : 'unavailable');
 }
 export function validateSite(value: unknown): Site {
@@ -32,8 +34,12 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
   const audience = site.service_id, database = site.database_instance_id;
   let current = empty(), generation = 0;
   const listeners = new Set<() => void>();
+  const evidenceCursors = new Set<string>(), evidenceIds = new Set<string>();
+  const resetEvidence = () => { evidenceCursors.clear(); evidenceIds.clear(); };
+  const sameScope = (scope: Command['scope']) => scope.authority_service_id === audience && scope.database_instance_id === database;
+  const sameRef = (a: Command['state_ref'], b: Command['state_ref']) => a.id === b.id && a.revision === b.revision && a.digest === b.digest;
   const publish = (patch: Partial<Snapshot>) => { current = Object.freeze({...current, ...patch}); for (const fn of listeners) fn(); };
-  const clearLocal = (notice: Notice | null = 'local_cleared') => { generation++; client.clearLocalState(); current = empty(); publish({notice}); };
+  const clearLocal = (notice: Notice | null = 'local_cleared') => { generation++; resetEvidence(); client.clearLocalState(); current = empty(); publish({notice}); };
   async function action(run: (alive: () => void) => Promise<void>) {
     if (current.busy) return;
     const version = generation, alive = () => { if (version !== generation) throw new Error('session_generation'); };
@@ -90,10 +96,49 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
       else publish({notice: 'forbidden'});
     }); },
     refreshDevices: () => action(readDevices),
+    readCommand(id: string) { return action(async alive => {
+      resetEvidence(); publish({command: null, evidence: null});
+      if (!/^[A-Za-z0-9._:/-]{1,256}$/.test(id)) throw new Rejected('invalid_command');
+      if (!current.session?.permissions.includes('command.read')) throw new Rejected('forbidden');
+      await token(['command.read'], alive);
+      const response = await client.getCommand(id); alive(); accept(response.status, '200');
+      if (response.status !== '200') return;
+      const record = response.body.record;
+      if (record.command_id !== id || !sameScope(record.scope) || record.state.command_id !== id || !sameScope(record.state.scope)) throw new Rejected('incompatible');
+      publish({command: record});
+    }); },
+    readEvidence(next = false) { return action(async alive => {
+      const command = current.command, previous = current.evidence;
+      publish({evidence: null});
+      if (!command || next && (!previous || previous.next_cursor === null)) throw new Rejected('stale');
+      if (!current.session?.permissions.includes('command.evidence.read')) throw new Rejected('forbidden');
+      if (!next) resetEvidence();
+      const cursor = next ? previous!.next_cursor! : undefined;
+      if (cursor && (evidenceCursors.has(cursor) || evidenceCursors.size >= 64)) throw new Rejected('stale');
+      await token(['command.evidence.read'], alive);
+      const response = await client.getCommandEvidence(command.command_id, {state_revision: command.state.revision, limit: 32, ...(cursor ? {cursor} : {})});
+      alive(); accept(response.status, '200'); if (response.status !== '200') return;
+      const page = response.body, index = command.evidence_index;
+      const offset = next ? BigInt(previous!.offset) + BigInt(previous!.items.length) : 0n;
+      if (!sameScope(page.scope) || page.command_id !== command.command_id || !sameRef(page.snapshot_ref, index.snapshot_ref) ||
+          !sameRef(page.state_ref, index.state_ref) || page.total !== index.total || BigInt(page.offset) !== offset ||
+          offset + BigInt(page.items.length) > BigInt(page.total) ||
+          (page.next_cursor === null) !== (offset + BigInt(page.items.length) === BigInt(page.total)) ||
+          page.next_cursor !== null && (!page.items.length || page.next_cursor === cursor || evidenceCursors.has(page.next_cursor))) throw new Rejected('stale');
+      const ids = new Set<string>();
+      for (const item of page.items) {
+        const key = JSON.stringify([item.kind, item.source_ref.id, item.source_ref.revision]);
+        if (!sameScope(item.scope) || item.command_id !== command.command_id || ids.has(key) || evidenceIds.has(key)) throw new Rejected('incompatible');
+        ids.add(key);
+      }
+      if (cursor) evidenceCursors.add(cursor);
+      for (const key of ids) evidenceIds.add(key);
+      publish({evidence: page});
+    }); },
     selectDevice(id: string) { return action(async alive => { if (!current.devices.some(d => d.device_id === id)) throw new Rejected('stale'); await readControl(id, alive); }); },
     refreshSession() { return action(async alive => {
       const response = await client.refresh(crypto.randomUUID()); alive(); accept(response.status, '200');
-      if (response.status === '200') publish({session: response.body.data, devices: Object.freeze([]), selected: null, control: null, catalogRevision: null, lastRead: null});
+      if (response.status === '200') { resetEvidence(); publish({session: response.body.data, devices: Object.freeze([]), selected: null, control: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); }
     }); },
     logout() { return action(async alive => {
       let notice: Notice = 'logout_unconfirmed';
