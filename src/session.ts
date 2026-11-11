@@ -1,5 +1,7 @@
 import {createBrowserSessionClient, contractSelection, SessionClientError} from '@leafseamer/sdk';
 import type {BrowserSessionClient, Results} from '@leafseamer/sdk';
+import {browserRecoveryStorage, createControlActions} from './control-actions.ts';
+import type {ControlActionState, RecoveryStorage} from './control-actions.ts';
 
 export type Session = Extract<Results['controller']['login'], {status: '201'}>['body']['data'];
 export type Device = Extract<Results['controller']['listDevices'], {status: '200'}>['body']['data']['items'][number];
@@ -7,11 +9,11 @@ export type Control = Extract<Results['controller']['getControl'], {status: '200
 export type Command = Extract<Results['controller']['getCommand'], {status: '200'}>['body']['record'];
 export type EvidencePage = Extract<Results['controller']['getCommandEvidence'], {status: '200'}>['body'];
 export type Site = {format: 'leafseamer.gui.site/1'; site_label: string; service_id: string | null; database_instance_id: string | null; selection: typeof contractSelection};
-export type Notice = 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
+export type Notice = 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
 export type Snapshot = Readonly<{busy: boolean; session: Session | null; loginLabel: string; devices: readonly Device[]; selected: string | null;
-  control: Control | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
+  control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
 const empty = (): Snapshot => Object.freeze({busy: false, session: null, loginLabel: '', devices: Object.freeze([]), selected: null,
-  control: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
+  control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
 class Rejected extends Error { code: Notice; constructor(code: Notice) { super(code); this.code = code; } }
 function accept(status: string, expected: string): void {
   if (status === expected) return;
@@ -29,17 +31,17 @@ export function validateSite(value: unknown): Site {
 }
 
 // 生命周期独立于React；组件重挂载不发请求，所有操作只由显式用户事件调用。
-export function createSessionManager(site: Site, client: BrowserSessionClient = createBrowserSessionClient({baseUrl: globalThis.location.origin})) {
+export function createSessionManager(site: Site, client: BrowserSessionClient = createBrowserSessionClient({baseUrl: globalThis.location.origin}), recoveryStorage: RecoveryStorage | null = browserRecoveryStorage()) {
   if (!site.service_id || !site.database_instance_id) throw new Error('site_configuration');
   const audience = site.service_id, database = site.database_instance_id;
-  let current = empty(), generation = 0;
+  let current = empty(), generation = 0, tokenScopes: readonly string[] = [], tokenExpires = 0;
   const listeners = new Set<() => void>();
   const evidenceCursors = new Set<string>(), evidenceIds = new Set<string>();
   const resetEvidence = () => { evidenceCursors.clear(); evidenceIds.clear(); };
   const sameScope = (scope: Command['scope']) => scope.authority_service_id === audience && scope.database_instance_id === database;
   const sameRef = (a: Command['state_ref'], b: Command['state_ref']) => a.id === b.id && a.revision === b.revision && a.digest === b.digest;
   const publish = (patch: Partial<Snapshot>) => { current = Object.freeze({...current, ...patch}); for (const fn of listeners) fn(); };
-  const clearLocal = (notice: Notice | null = 'local_cleared') => { generation++; resetEvidence(); client.clearLocalState(); current = empty(); publish({notice}); };
+  const clearLocal = (notice: Notice | null = 'local_cleared', preserveRecovery = false) => { generation++; tokenScopes = []; tokenExpires = 0; resetEvidence(); controlActions.reset(preserveRecovery); client.clearLocalState(); current = empty(); publish({notice}); };
   async function action(run: (alive: () => void) => Promise<void>) {
     if (current.busy) return;
     const version = generation, alive = () => { if (version !== generation) throw new Error('session_generation'); };
@@ -48,11 +50,18 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     catch (error) {
       if (version !== generation) return;
       if (error instanceof Rejected && error.code !== 'unauthorized') publish({notice: error.code});
-      else clearLocal(error instanceof Rejected || error instanceof SessionClientError && error.code === 'session_credentials_missing' ? 'unauthorized' : 'network');
+      else clearLocal(error instanceof Rejected || error instanceof SessionClientError && error.code === 'session_credentials_missing' ? 'unauthorized' : 'network', true);
     } finally { if (version === generation) publish({busy: false}); }
   }
   async function token(scopes: string[], alive: () => void) {
+    if (performance.now() < tokenExpires && scopes.every(scope => tokenScopes.includes(scope))) return;
+    // 其它显式操作换令牌时撤销未提交草稿；已发送的查原身份仍保留。
+    if (current.controlAction?.phase === 'prepared') publish({controlAction: null});
+    tokenScopes = []; tokenExpires = 0; const started = performance.now();
     const response = await client.issueToken({audience, requested_scopes: scopes}); alive(); accept(response.status, '201');
+    if (response.status === '201' && Number.isSafeInteger(response.body?.data.expires_in) && response.body.data.expires_in > 0) {
+      tokenScopes = [...scopes]; tokenExpires = started + response.body.data.expires_in * 1000;
+    }
   }
   async function readControl(id: string, alive: () => void) {
     publish({selected: id, control: null}); await token(['control.read'], alive);
@@ -83,15 +92,21 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     }
     throw new Rejected('stale');
   }
+  const controlActions = createControlActions({site, client, storage: recoveryStorage, state: () => current, publish, action, token, accept,
+    fail(code): never { throw new Rejected(code); }});
   return Object.freeze({
+    ...controlActions.api,
     getSnapshot: () => current,
     subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; },
     clearLocal,
+    leavePage: () => clearLocal('local_cleared', true),
     login(login: string, password: string) { return action(async alive => {
+      tokenScopes = []; tokenExpires = 0;
       publish({...empty(), busy: true});
       const response = await client.login({login, password}); alive(); accept(response.status, '201');
       if (response.status !== '201') return;
       publish({session: response.body.data, loginLabel: login});
+      controlActions.restore(response.body.data);
       if (response.body.data.permissions.includes('device.read')) await readDevices(alive);
       else publish({notice: 'forbidden'});
     }); },
@@ -137,8 +152,9 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     }); },
     selectDevice(id: string) { return action(async alive => { if (!current.devices.some(d => d.device_id === id)) throw new Rejected('stale'); await readControl(id, alive); }); },
     refreshSession() { return action(async alive => {
+      tokenScopes = []; tokenExpires = 0;
       const response = await client.refresh(crypto.randomUUID()); alive(); accept(response.status, '200');
-      if (response.status === '200') { resetEvidence(); publish({session: response.body.data, devices: Object.freeze([]), selected: null, control: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); }
+      if (response.status === '200') { resetEvidence(); publish({session: response.body.data, devices: Object.freeze([]), selected: null, control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); controlActions.restore(response.body.data); }
     }); },
     logout() { return action(async alive => {
       let notice: Notice = 'logout_unconfirmed';

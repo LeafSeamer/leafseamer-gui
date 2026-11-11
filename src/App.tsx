@@ -4,6 +4,7 @@ import type {SessionManager, Site, Snapshot} from './session.ts';
 import {translations} from './i18n.ts';
 import type {Language, Copy} from './i18n.ts';
 import {CommandPane} from './CommandPane.tsx';
+import {ControlPane} from './ControlPane.tsx';
 
 type Tab = 'devices' | 'commands' | 'automation' | 'session';
 function Icon({name}: {name: Tab | 'alert'}) {
@@ -35,6 +36,7 @@ function DevicePane({manager, state, copy, language}: {manager: SessionManager; 
   const device = state.devices.find(d => d.device_id === state.selected), control = state.control;
   return <><div className="heading"><h1>{copy.devices}</h1><button className="primary" onClick={() => void manager.refreshDevices()} disabled={state.busy}>{state.busy ? copy.busy : copy.refresh}</button></div>
     <div className="warning"><Icon name="alert"/><span>{copy.notice}</span></div>
+    <ControlPane manager={manager} state={state} copy={copy}/>
     <div className="device-layout"><section className="device-list" aria-label={copy.list}><h2>{copy.list}</h2>
       {state.devices.length === 0 && <p className="muted">{state.busy ? copy.busy : state.catalogRevision === null ? copy.unread : copy.empty}</p>}
       {state.devices.map(item => <button key={item.device_id} aria-pressed={state.selected === item.device_id} className={`device-row ${state.selected === item.device_id ? 'selected' : ''}`} disabled={state.busy}
@@ -57,7 +59,7 @@ function SessionPane({manager, state, copy}: {manager: SessionManager; state: Sn
       [copy.sessionId, session.session_id], [copy.authRevision, session.authorization_revision], [copy.expires, session.validity.not_after],
       [copy.permissions, <ul className="permission-list">{session.permissions.map(p => <li key={p}>{p}</li>)}</ul>]]}/></>;
 }
-const fallback: Snapshot = Object.freeze({busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
+const fallback: Snapshot = Object.freeze({busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, controlAction: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
 const noopSubscribe = () => () => {}, fallbackSnapshot = () => fallback;
 export default function App({site, manager}: {site: Site | null; manager: SessionManager | null}) {
   const state = useSyncExternalStore(manager?.subscribe ?? noopSubscribe, manager?.getSnapshot ?? fallbackSnapshot);

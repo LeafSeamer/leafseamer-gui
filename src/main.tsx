@@ -12,5 +12,5 @@ try {
   site = validateSite(JSON.parse(text));
   if (site.service_id && location.protocol === 'https:') manager = createSessionManager(site);
 } catch { /* 不从URL参数或用户输入替换站点与秘密接收方。 */ }
-window.addEventListener('pagehide', () => manager?.clearLocal());
+window.addEventListener('pagehide', () => manager?.leavePage());
 createRoot(document.getElementById('root')!).render(<StrictMode><App site={site} manager={manager}/></StrictMode>);
