@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {build} from 'vite';
+import {validateSite} from '../src/site.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const sdkRoot = new URL('./', import.meta.resolve('@leafseamer/sdk'));
@@ -20,15 +21,16 @@ const args = process.argv.slice(2);
 if (args.length && (args.length !== 2 || args[0] !== '--config')) throw new Error('build_arguments');
 let config = {site_label: '本机 Controller', service_id: null, database_instance_id: null};
 if (args.length) {
-  const bytes = await fs.readFile(path.resolve(args[1])); if (bytes.length > 4096) throw new Error('site_configuration');
+  const bytes = await fs.readFile(path.resolve(args[1])); if (bytes.length > 32768) throw new Error('site_configuration');
   config = JSON.parse(bytes);
-  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
-  if (Object.keys(config).sort().join(',') !== 'database_instance_id,service_id,site_label' || !uuid(config.service_id) || !uuid(config.database_instance_id) ||
-      typeof config.site_label !== 'string' || config.site_label.length < 1 || config.site_label.length > 120 || /[\u0000-\u001f\u007f]/.test(config.site_label)) throw new Error('site_configuration');
+  if(!config||typeof config!=='object'||Object.keys(config).sort().join(',')!==(Object.hasOwn(config,'seamer')?'database_instance_id,seamer,service_id,site_label':'database_instance_id,service_id,site_label'))throw new Error('site_configuration');
+  const validated=validateSite({format:config.seamer&&Object.hasOwn(config.seamer,'binding_source')?'leafseamer.gui.site/3':Object.hasOwn(config,'seamer')?'leafseamer.gui.site/2':'leafseamer.gui.site/1',...config,selection:sdk.selection});
+  if(validated.format!=='leafseamer.gui.site/3'&&bytes.length>4096)throw new Error('site_configuration');
+  if(!validated.service_id)throw new Error('site_configuration');
 }
 await build({root, configFile: path.join(root, 'vite.config.mjs')});
 const output = path.join(root, 'dist');
-await fs.writeFile(path.join(output, 'site.json'), JSON.stringify({format: 'leafseamer.gui.site/1', ...config, selection: sdk.selection}) + '\n');
+await fs.writeFile(path.join(output, 'site.json'), JSON.stringify({format:config.seamer&&Object.hasOwn(config.seamer,'binding_source')?'leafseamer.gui.site/3':Object.hasOwn(config,'seamer')?'leafseamer.gui.site/2':'leafseamer.gui.site/1', ...config, selection: sdk.selection}) + '\n');
 await fs.copyFile(new URL('../LICENSE', sdkRoot), path.join(output, 'SDK-LICENSE.txt'));
 const licenses = await Promise.all(['react', 'react-dom', 'scheduler'].map(async name => {
   const directory = path.dirname(fileURLToPath(import.meta.resolve(name)));

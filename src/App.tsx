@@ -5,6 +5,8 @@ import {translations} from './i18n.ts';
 import type {Language, Copy} from './i18n.ts';
 import {CommandPane} from './CommandPane.tsx';
 import {ControlPane} from './ControlPane.tsx';
+import {CapabilityPane} from './CapabilityPane.tsx';
+import {DraftPane} from './DraftPane.tsx';
 
 type Tab = 'devices' | 'commands' | 'automation' | 'session';
 function Icon({name}: {name: Tab | 'alert'}) {
@@ -34,19 +36,21 @@ function LoginPane({manager, state, copy, reason}: {manager: SessionManager | nu
 }
 function DevicePane({manager, state, copy, language}: {manager: SessionManager; state: Snapshot; copy: Copy; language: Language}) {
   const device = state.devices.find(d => d.device_id === state.selected), control = state.control;
+  const connected=state.capabilities?.devices.find(d=>d.device_id===state.selected);
   return <><div className="heading"><h1>{copy.devices}</h1><button className="primary" onClick={() => void manager.refreshDevices()} disabled={state.busy}>{state.busy ? copy.busy : copy.refresh}</button></div>
     <div className="warning"><Icon name="alert"/><span>{copy.notice}</span></div>
     <ControlPane manager={manager} state={state} copy={copy}/>
     <div className="device-layout"><section className="device-list" aria-label={copy.list}><h2>{copy.list}</h2>
       {state.devices.length === 0 && <p className="muted">{state.busy ? copy.busy : state.catalogRevision === null ? copy.unread : copy.empty}</p>}
       {state.devices.map(item => <button key={item.device_id} aria-pressed={state.selected === item.device_id} className={`device-row ${state.selected === item.device_id ? 'selected' : ''}`} disabled={state.busy}
-        onClick={() => void manager.selectDevice(item.device_id)}><span><strong>{item.display_name}</strong><small>{item.device_kind}</small></span><span>{copy[item.connection_state]}</span></button>)}
+        onClick={() => void manager.selectDevice(item.device_id)}><span><strong>{item.display_name}</strong><small>{item.device_kind}</small></span><span>{item.device_id===connected?.device_id?copy[connected.connection_state]:copy.unknown}</span></button>)}
     </section><section className="device-detail" aria-label={device?.display_name ?? copy.choose}>
       {device ? <><h2>{device.display_name}</h2><p className="muted identifier">{copy.logicalId}：{device.device_id}</p>
-        <Rows rows={[[copy.connection, copy[device.connection_state]], [copy.mode, control ? copy[control.mode] : copy.unknown],
+        <Rows rows={[[copy.connection, connected?copy[connected.connection_state]:copy.unknown], [copy.mode, control ? copy[control.mode] : copy.unknown],
           [copy.holder, control ? control.holder ? `${control.holder.issuer_id} / ${control.holder.issuer_epoch} / ${control.holder.principal_id}` : copy.none : copy.unknown],
           [copy.gate, control ? copy[control.gate_state] : copy.unknown], [copy.version, control?.effective_version ?? copy.unknown],
           [copy.inFlight, control?.in_flight_command_ids.length ?? copy.unknown], [copy.unresolved, control?.unresolved_command_ids.length ?? copy.unknown]]}/>
+        <CapabilityPane manager={manager} state={state} copy={copy} language={language}/>
         <section className="observation"><h2>{copy.observation}</h2><p className="muted">{copy.noObservation}</p></section>
         <footer className="detail-footer"><p>{copy.readOnly}</p>{state.lastRead && <small>{copy.lastRead}：{new Date(state.lastRead).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', {timeZoneName: 'short'})} · {copy.catalog} {state.catalogRevision}</small>}</footer>
       </> : <p className="muted empty-detail">{copy.choose}</p>}
@@ -59,7 +63,7 @@ function SessionPane({manager, state, copy}: {manager: SessionManager; state: Sn
       [copy.sessionId, session.session_id], [copy.authRevision, session.authorization_revision], [copy.expires, session.validity.not_after],
       [copy.permissions, <ul className="permission-list">{session.permissions.map(p => <li key={p}>{p}</li>)}</ul>]]}/></>;
 }
-const fallback: Snapshot = Object.freeze({busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, controlAction: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
+const fallback: Snapshot = Object.freeze({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, controlAction: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
 const noopSubscribe = () => () => {}, fallbackSnapshot = () => fallback;
 export default function App({site, manager}: {site: Site | null; manager: SessionManager | null}) {
   const state = useSyncExternalStore(manager?.subscribe ?? noopSubscribe, manager?.getSnapshot ?? fallbackSnapshot);
@@ -82,7 +86,7 @@ export default function App({site, manager}: {site: Site | null; manager: Sessio
         tab === 'devices' ? <DevicePane manager={manager} state={state} copy={copy} language={language}/> :
         tab === 'commands' ? <CommandPane manager={manager} state={state} copy={copy} language={language}/> :
         tab === 'session' ? <SessionPane manager={manager} state={state} copy={copy}/> :
-        <section className="empty-service"><h1>{copy.noAutomation}</h1><p className="muted">{copy.noAutomationHint}</p></section>}
+        <DraftPane site={site!} manager={manager} state={state} copy={copy}/>}
     </main>
   </div></div>;
 }
