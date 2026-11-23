@@ -18,18 +18,26 @@ for (const [name, digest] of Object.entries(sdk.artifacts)) {
 }
 if (hash(await fs.readFile(new URL('../LICENSE', sdkRoot))) !== lock.license_sha256) throw new Error('sdk_license_drift');
 const args = process.argv.slice(2);
-if (args.length && (args.length !== 2 || args[0] !== '--config')) throw new Error('build_arguments');
+const options = new Map();
+if (args.length % 2) throw new Error('build_arguments');
+for (let i = 0; i < args.length; i += 2) {
+  if (!['--config', '--out-dir'].includes(args[i]) || options.has(args[i]) || !args[i + 1]) throw new Error('build_arguments');
+  options.set(args[i], args[i + 1]);
+}
+const customOutput = options.get('--out-dir');
+if (customOutput !== undefined && !path.isAbsolute(customOutput)) throw new Error('build_arguments');
 let config = {site_label: '本机 Controller', service_id: null, database_instance_id: null};
-if (args.length) {
-  const bytes = await fs.readFile(path.resolve(args[1])); if (bytes.length > 32768) throw new Error('site_configuration');
+if (options.has('--config')) {
+  const bytes = await fs.readFile(path.resolve(options.get('--config'))); if (bytes.length > 32768) throw new Error('site_configuration');
   config = JSON.parse(bytes);
   if(!config||typeof config!=='object'||Object.keys(config).sort().join(',')!==(Object.hasOwn(config,'seamer')?'database_instance_id,seamer,service_id,site_label':'database_instance_id,service_id,site_label'))throw new Error('site_configuration');
   const validated=validateSite({format:config.seamer&&Object.hasOwn(config.seamer,'binding_source')?'leafseamer.gui.site/3':Object.hasOwn(config,'seamer')?'leafseamer.gui.site/2':'leafseamer.gui.site/1',...config,selection:sdk.selection});
   if(validated.format!=='leafseamer.gui.site/3'&&bytes.length>4096)throw new Error('site_configuration');
   if(!validated.service_id)throw new Error('site_configuration');
 }
-await build({root, configFile: path.join(root, 'vite.config.mjs')});
-const output = path.join(root, 'dist');
+const output = customOutput ?? path.join(root, 'dist');
+if (customOutput !== undefined) await fs.mkdir(output);
+await build({root, configFile: path.join(root, 'vite.config.mjs'), build: {outDir: output, emptyOutDir: customOutput === undefined}});
 await fs.writeFile(path.join(output, 'site.json'), JSON.stringify({format:config.seamer&&Object.hasOwn(config.seamer,'binding_source')?'leafseamer.gui.site/3':Object.hasOwn(config,'seamer')?'leafseamer.gui.site/2':'leafseamer.gui.site/1', ...config, selection: sdk.selection}) + '\n');
 await fs.copyFile(new URL('../LICENSE', sdkRoot), path.join(output, 'SDK-LICENSE.txt'));
 const licenses = await Promise.all(['react', 'react-dom', 'scheduler'].map(async name => {

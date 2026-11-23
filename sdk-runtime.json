@@ -1,9 +1,9 @@
 {
   "format": "leafseamer-gui-sdk/1",
-  "manifest_sha256": "9aee892f58e0d0879861dc70fdd115e094689c445d047f45fce4ccc373021934",
+  "manifest_sha256": "fa27362c985f75300933f21d4a372fa1c733dc33b6138de0baaeeb8746a29732",
   "selection": {
-    "contract_id": "leafseamer.api.v1.product8",
-    "contract_digest": "sha256:7a58cc7162a8d2ea39eb92b29118aa5a718ec55668210f67e974614af3d4cffa"
+    "contract_id": "leafseamer.api.v1.product9",
+    "contract_digest": "sha256:cef9830f5f8491dc056015f8bb18e6b0d97262957e344695e93df5af8bf298a5"
   },
   "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 }

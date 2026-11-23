@@ -22,7 +22,7 @@ npm run build
 }
 ```
 
-运行 `npm run build -- --config <配置文件>` 生成 `dist`。该配置没有密码、令牌或服务 URL。Controller 的可信本地装配调用 `startController`，提供现有 TLS／认证提供者及 `guiDirectory` 指向此 `dist` 的绝对目录。服务启动时校验合同、SDK 清单摘要、站点持久身份与全部静态文件摘要，之后仅交付已固定的内存字节。GUI 必须与 Controller 共用 HTTPS 根入口；不通过查询参数选择服务，不依赖跨域代理，也不允许明文入口登录。生产认证提供者、TLS 安装和组合启动仍由 Controller／Suite 的相应实现与验收负责。
+运行 `npm run build -- --config <配置文件>` 生成 `dist`。附加 `--out-dir <尚未创建的绝对目录>` 可为这一站点生成独立产物。用 Controller 的 `supervise --pairing-profile` 启动时，在受信配置的 `gui` 中填入产物目录和 `gui-manifest.json` 原字节摘要。现有本地程序装配也可通过 `startController` 的 `guiDirectory` 提供产物。服务启动时校验 SDK 清单、站点实例和静态文件摘要，随后在 Controller 的 HTTPS 根路径提供已固定的资源。正式认证提供者和 TLS 安装按 Controller 与 Suite 的部署要求验收。
 
 ## 会话与读取行为
 
@@ -72,6 +72,8 @@ npm run build
 
 `test/seamer-draft-browser-check.mjs`由Seamer的实际双进程测试驱动，使用本机Controller与Seamer真实HTTPS、SQLite和配对链。通过环境显式提供Playwright、Edge与外部截图目录；Browser插件不可用时采用已有Playwright，不安装依赖或改动系统证书库。实际浏览器验证创建、两类编辑、CORS读取、已提交响应丢失后的重载登录与只读查原，以及1440像素中文浅色／390像素英文深色布局。仅故障注入阶段在真实提交后中断响应；首次配对、首个本地管理员和环境资格仍为测试预置，不能作为首次部署验收。
 
+在 Seamer 的 `first-pairing-import.test.mjs` 中设置 `LEAFSEAMER_GUI_PLAYWRIGHT`、`LEAFSEAMER_GUI_BROWSER` 和 `LEAFSEAMER_GUI_OUTPUT` 的绝对路径，可从首次配对继续验证草稿。该用例使用新建业务库，由 Controller 和 Seamer 的独立 CLI 完成配对、首位管理员批准和两端权限登记，再通过实际 Edge 登录。它还验证 Seamer 重启后读取旧草稿，以及已提交响应丢失后查询原请求。环境时钟和证书仍采用受控测试材料。
+
 ## 定义发布与固定版本读取
 
 已读取的当前草稿可准备发布，显示定义、内容修订及内容／选择摘要；未保存修改、历史查原草稿或未确认写入会阻止确认。准备和取消不签发凭据或访问网络。确认时使用具备发布权限的定向令牌及新Seamer独立context，先保存非秘密查原身份再发送一次；发布成功不布防或运行。刷新会话、重新读取或编辑草稿会清除旧准备。
@@ -79,6 +81,8 @@ npm run build
 发布响应不确定时，保留原请求身份；重新登录只查询原结果，核对操作、摘要、定义、原草稿修订及发布人员，不假定版本连续，不自动再发布。固定版本读取校验artifact、完整程序、绑定和独立性证明的摘要关联；历史视图带读取时间，不代表当前来源或设备仍可执行。切换证明选择不会把旧证明显示为新选择的结果。
 
 真实双进程浏览器测试包含发布、原件读取与已提交发布响应丢失后的查原恢复。测试采用真实人员登录、定向令牌、配对身份核验、HTTPS和SQLite；首个配对管理、环境资格、绑定注册与覆盖批准原件仍为明确的合成测试提供者。该发布用例不证明真实权威来源与发布的完整集成，也未完成布防、运行或真实设备验收。绑定批准界面及其独立验收见下文。
+
+Suite 的 `successor_capture_events` 联调可从首次配对继续验证实际模拟器来源的浏览器发布。配置 `LEAFSEAMER_PUBLICATION_GUI_TEST_ROOT`、`LEAFSEAMER_PLAYWRIGHT_MODULE`、`LEAFSEAMER_BROWSER_EXECUTABLE` 和 `LEAFSEAMER_BROWSER_ARTIFACTS` 的绝对路径，由联调构建本次站点配置并启动 Edge。首次授权经 Controller 签发，由 Seamer 使用停机 CLI 导入并单次消费。同一配对的事件与动作绑定获批后，浏览器登录、打开草稿、发布并读取固定版本，校验制品和编译程序，截图保存到指定外部目录。联调使用受控证书、时钟证据与临时数据库。
 
 ## 绑定来源审阅、批准和撤销
 

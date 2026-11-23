@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+
+const config=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+for(const name of ['playwright','browser','output'])assert.ok(path.isAbsolute(config[name]),name);
+const {chromium}=createRequire(import.meta.url)(config.playwright);
+const browser=await chromium.launch({executablePath:config.browser,headless:true,
+ args:['--ignore-certificate-errors-spki-list='+config.spkis.join(',')]});
+const errors=[];
+try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000},locale:'zh-CN'});
+ page.setDefaultTimeout(8000);
+ page.on('pageerror',error=>errors.push(error.message));
+ page.on('console',message=>{
+  if(['warning','error'].includes(message.type())&&!message.location().url.endsWith('/favicon.ico'))errors.push(message.text());
+ });
+ const landing=await page.goto(config.origin);
+ assert.equal(landing.status(),200);
+ assert.equal(new URL(page.url()).origin,config.origin);
+ assert.match(await page.title(),/LeafSeamer/);
+ assert.ok(landing.headers()['content-security-policy'].includes("connect-src 'self' "+config.seamerOrigin));
+ await page.getByRole('heading',{name:'登录工作台',exact:true}).waitFor();
+ assert.equal(await page.locator('vite-error-overlay').count(),0);
+ await page.getByLabel('用户名',{exact:true}).fill('role.test');
+ await page.getByLabel('密码',{exact:true}).fill('Synthetic-role-password-123');
+ await page.getByRole('button',{name:'登录',exact:true}).click();
+ await page.getByRole('button',{name:'自动化',exact:true}).click();
+ const definitionId=config.published.definition_id,definition=page.locator('#definition-id');
+ await definition.fill(definitionId);
+ await page.locator('form').filter({has:definition}).getByRole('button',{name:'查询',exact:true}).click();
+ await page.getByRole('heading',{name:'草稿信息',exact:true}).waitFor();
+ await page.getByRole('button',{name:'准备发布',exact:true}).click();
+ const endpoint=config.seamerOrigin+'/api/v1/definitions/'+definitionId;
+ const publishedResponse=page.waitForResponse(response=>response.url()===endpoint+'/publish'&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'确认发布',exact:true}).click();
+ const publication=await publishedResponse;
+ assert.equal(publication.status(),201);
+ const published=await publication.json();
+ assert.equal(published.definition_id,definitionId);
+ assert.equal(published.source_draft_revision,config.published.source_draft_revision);
+ assert.equal(published.bindings_digest,config.published.bindings_digest);
+ await page.getByText('发布结果已确认。该版本尚未因此布防或开始运行。',{exact:true}).waitFor();
+
+ const versionPath=endpoint+'/versions/'+published.definition_version;
+ const readArtifact=page.waitForResponse(response=>response.url()===versionPath+'/artifact'&&response.request().method()==='GET');
+ const readProgram=page.waitForResponse(response=>response.url()===versionPath+'/program'&&response.request().method()==='GET');
+ const history=page.locator('.publication-history');
+ assert.equal(await history.locator('#publication-version').inputValue(),published.definition_version);
+ await history.getByRole('button',{name:'读取发布版本',exact:true}).click();
+ const [artifactResponse,programResponse]=await Promise.all([readArtifact,readProgram]);
+ assert.equal(artifactResponse.status(),200);
+ assert.equal(programResponse.status(),200);
+ const artifact=await artifactResponse.json(),program=await programResponse.json();
+ assert.equal(artifact.program_digest,published.program_digest);
+ assert.equal(program.definition_version,published.definition_version);
+ assert.deepEqual(program.input_bindings,config.program.input_bindings);
+ assert.deepEqual(program.action_bindings,config.program.action_bindings);
+ assert.deepEqual(program.program,config.program.program);
+ await history.getByText(artifact.program_digest,{exact:true}).waitFor();
+ fs.mkdirSync(config.output,{recursive:true});
+ await page.screenshot({path:path.join(config.output,'first-pairing-publication-desktop.png')});
+ await page.setViewportSize({width:390,height:844});
+ await history.scrollIntoViewIfNeeded();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:path.join(config.output,'first-pairing-publication-mobile.png')});
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({version:published.definition_version,bindings_digest:published.bindings_digest}));
+}finally{await browser.close();}
