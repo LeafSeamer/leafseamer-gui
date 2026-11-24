@@ -1,5 +1,5 @@
 import {prepareManualCommand} from '@leafseamer/sdk';
-import type {BrowserSessionClient, PreparedManualCommand, Results} from '@leafseamer/sdk';
+import type {BrowserSessionClient, Inputs, PreparedManualCommand, Results} from '@leafseamer/sdk';
 import {samePrincipal} from './control-actions.ts';
 import type {RecoveryStorage} from './control-actions.ts';
 import type {Notice, Session, Site, Snapshot} from './session.ts';
@@ -7,7 +7,8 @@ import type {Notice, Session, Site, Snapshot} from './session.ts';
 type Identity = PreparedManualCommand['identity'];
 type Admission = Extract<Results['controller']['submitCommand'], {status:'202'}>['body'];
 export type SceneCatalog = Extract<Results['controller']['getSceneCatalog'],{status:'200'}>['body']['data'];
-type Saved = Readonly<{device_id:string; identity:Identity}>;
+type Rejection = Omit<Inputs['controller']['rejectCommandAdmission']['body'],'identity'>;
+type Saved = Readonly<{device_id:string; identity:Identity; rejection?:Rejection}>;
 export type ObsCommand = Readonly<{saved:Saved; phase:'unknown'|'not_found'|'accepted'|'rejected'; commandId:string|null}>;
 const actionId = 'obs.program_scene.set';
 const writeScopes = ['device.read','control.read','device.command','command.read','request.create'];
@@ -24,6 +25,11 @@ export function canDismissObsCut(state:Snapshot){
   const pending=state.obsCommand,record=state.command;
   return pending?.phase==='rejected'||pending?.phase==='accepted'&&record?.command_id===pending.commandId&&
     record.state.phase==='finished'&&record.state.resource_status==='clear';
+}
+export function canRejectObsCut(state:Snapshot){
+  const pending=state.obsCommand;
+  return pending?.phase==='not_found'&&pending.saved.device_id===state.selected&&!!pending.saved.rejection&&
+    samePrincipal(pending.saved.identity.key,state.session)&&canRead(state.session,'command.cancel');
 }
 const sceneRef=(catalog:SceneCatalog,scene_id:string)=>({collection_ref:catalog.collection_ref,collection_generation:catalog.collection_generation,
   catalog_revision:catalog.catalog_revision,binding_revision:catalog.binding_revision,scene_id});
@@ -49,12 +55,16 @@ export function createObsActions({site,client,storage,state,publish,action,token
       const text=storage?.getItem(keyFor(session));if(!text)return;
       if(text.length>8192)throw new Error('shape');
       const saved=JSON.parse(text) as Saved,k=saved.identity.key;
-      if(Object.keys(saved).sort().join(',')!=='device_id,identity'||!bounded(saved.device_id)||
+      if(!['device_id,identity','device_id,identity,rejection'].includes(Object.keys(saved).sort().join(','))||!bounded(saved.device_id)||
         Object.keys(saved.identity).sort().join(',')!=='key,request_digest'||!/^sha256:[0-9a-f]{64}$/.test(saved.identity.request_digest)||
         Object.keys(k).sort().join(',')!=='idempotency_key,issuer_epoch,issuer_id,operation_id,principal_id,request_epoch,target_scope'||
         Object.keys(k.target_scope).sort().join(',')!=='authority_service_id,database_instance_id'||!sameScope(k.target_scope)||
         !samePrincipal(k,session)||k.operation_id!=='createCommand'||![k.request_epoch,k.idempotency_key].every(bounded))throw new Error('shape');
-      publish({obsCommand:{saved,phase:'unknown',commandId:null}});
+      const r=saved.rejection;
+      const rejection=r&&Object.keys(r).sort().join(',')==='content,rejection_operation_id'&&bounded(r.rejection_operation_id)&&
+        r.content?.device_id===saved.device_id&&r.content.action_id===actionId&&r.content.origin==='manual'&&r.content.automation_binding===null?r:undefined;
+      // 旧记录或缺少原正文时仍可查询，不能从当前场景重建原请求。
+      publish({obsCommand:{saved:{device_id:saved.device_id,identity:saved.identity,...(rejection&&{rejection})},phase:'unknown',commandId:null}});
     }catch{reset();}
   }
   function save(saved:Saved){
@@ -120,7 +130,9 @@ export function createObsActions({site,client,storage,state,publish,action,token
         expected_control:{epoch:control.control_epoch,version:control.effective_version},parameters:{scene_ref:sceneRef(latest,sceneId)},
         origin:'manual',automation_binding:null,required_completion:'effect_verified',preconditions:[],dispatch:{mode:'immediate',max_queue_ms:5000},evidence_timeout_ms:capability.evidence_timeout_ms,
       }});alive();
-      const saved={device_id:device,identity:prepared.identity};save(saved);clearEvidence();
+      const {context_id,idempotency_key,correlation_id,...content}=prepared.body;
+      const saved:Saved={device_id:device,identity:prepared.identity,rejection:{content,rejection_operation_id:crypto.randomUUID()}};
+      save(saved);clearEvidence();
       publish({obsCommand:{saved,phase:'unknown',commandId:null},obsCatalog:null,control:null,command:null,evidence:null});
       const response=await client.submitCommand(prepared.body);alive();
       if(response.status==='202'||response.status==='200'){adopt(response.body,saved);return;}
@@ -147,6 +159,24 @@ export function createObsActions({site,client,storage,state,publish,action,token
         record.target.device_id!==pending.saved.device_id||record.target.action_id!==actionId)return fail('incompatible');
       clearEvidence();publish({command:record,evidence:null});
     });},
-    dismissObsCut(){if(state().busy||!canDismissObsCut(state()))return;reset();publish({obsCommand:null});},
+    rejectObsCut(){return action(async alive=>{
+      const pending=state().obsCommand,rejection=pending?.saved.rejection;
+      if(!pending||!rejection||!canRejectObsCut(state()))return fail('stale');
+      await token(['command.cancel'],alive);
+      // Controller 对原键进行原子裁决。若受理已先提交，仍采用原受理记录。
+      publish({obsCommand:{...pending,phase:'unknown'}});
+      const response=await client.rejectCommandAdmission({identity:pending.saved.identity,...rejection});
+      alive();accept(response.status,'200');if(response.status==='200')adopt(response.body,pending.saved);
+    });},
+    dismissObsCut(){return action(async()=>{
+      const current=state();
+      if(!current.session||!canDismissObsCut(current))return;
+      try{
+        const key=keyFor(current.session);
+        if(!storage)throw new Error('storage');storage.removeItem(key);
+        if(storage.getItem(key)!==null)throw new Error('storage');
+      }catch{return fail('recovery_cleanup');}
+      publish({obsCommand:null});
+    });},
   }};
 }

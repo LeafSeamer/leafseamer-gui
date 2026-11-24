@@ -1,14 +1,15 @@
 import type {FormEvent} from 'react';
 import {useState} from 'react';
-import {canDismissObsCut,canSubmitObsCut} from './obs-actions.ts';
+import {canDismissObsCut,canRejectObsCut,canSubmitObsCut} from './obs-actions.ts';
 import {commandLabels} from './i18n.ts';
 import type {Copy,Language} from './i18n.ts';
 import type {SessionManager,Snapshot} from './session.ts';
 
 export function ObsScenePane({manager,state,copy,language}: {manager:SessionManager;state:Snapshot;copy:Copy;language:Language}){
-  const [scene,setScene]=useState('');
+  const [scene,setScene]=useState(''),[confirm,setConfirm]=useState<string|null>(null);
   const catalog=state.obsCatalog,canSend=canSubmitObsCut(state),pending=state.obsCommand;
   const record=state.command?.command_id===pending?.commandId?state.command:null;
+  const canReject=canRejectObsCut(state),rejectionId=pending?.saved.rejection?.rejection_operation_id;
   function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(canSend&&scene)void manager.submitObsCut(scene);
   }
@@ -29,9 +30,14 @@ export function ObsScenePane({manager,state,copy,language}: {manager:SessionMana
       {pending.commandId&&<p className="identifier">{pending.commandId}</p>}
       {record&&<p>{[record.state.phase,record.state.outcome,record.state.resource_status].map(value=>commandLabels[language][value]??value).join(' · ')}</p>}
       <div className="control-buttons">
-        {pending.phase!=='rejected'&&<button className="primary" disabled={state.busy||!state.session?.permissions.includes('command.read')} onClick={()=>void manager.lookupObsCut()}>{copy.obsLookup}</button>}
-        {canDismissObsCut(state)&&<button disabled={state.busy} onClick={()=>manager.dismissObsCut()}>{copy.obsDismiss}</button>}
+        {pending.phase!=='rejected'&&<button className="primary" disabled={state.busy||!state.session?.permissions.includes('command.read')} onClick={()=>{setConfirm(null);void manager.lookupObsCut();}}>{copy.obsLookup}</button>}
+        {canReject&&confirm!==rejectionId&&<button disabled={state.busy} onClick={()=>setConfirm(rejectionId??null)}>{copy.obsReject}</button>}
+        {canDismissObsCut(state)&&<button disabled={state.busy} onClick={()=>void manager.dismissObsCut()}>{copy.obsDismiss}</button>}
       </div>
+      {canReject&&confirm===rejectionId&&<div className="control-buttons">
+        <p>{copy.obsRejectHint}</p><button className="primary" disabled={state.busy} onClick={()=>{setConfirm(null);void manager.rejectObsCut();}}>{copy.obsConfirmReject}</button>
+        <button disabled={state.busy} onClick={()=>setConfirm(null)}>{copy.obsKeepRequest}</button>
+      </div>}
     </div>}
   </section>;
 }
