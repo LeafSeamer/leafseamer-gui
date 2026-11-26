@@ -8,6 +8,8 @@ import {ControlPane} from './ControlPane.tsx';
 import {CapabilityPane} from './CapabilityPane.tsx';
 import {ObsScenePane} from './ObsScenePane.tsx';
 import {DraftPane} from './DraftPane.tsx';
+import {StatusProjectionPane} from './StatusProjectionPane.tsx';
+import {emptyStatusProjection} from './status-subscription.ts';
 
 type Tab = 'devices' | 'commands' | 'automation' | 'session';
 function Icon({name}: {name: Tab | 'alert'}) {
@@ -57,7 +59,10 @@ function DevicePane({manager, state, copy, language}: {manager: SessionManager; 
         {device.device_kind!=='obs'&&<section className="observation"><h2>{copy.observation}</h2><p className="muted">{copy.noObservation}</p></section>}
         <footer className="detail-footer"><p>{copy.readOnly}</p>{state.lastRead && <small>{copy.lastRead}：{new Date(state.lastRead).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', {timeZoneName: 'short'})} · {copy.catalog} {state.catalogRevision}</small>}</footer>
       </> : <p className="muted empty-detail">{copy.choose}</p>}
-    </section></div></>;
+    </section></div>
+    {state.session?.permissions.includes('status.read') && state.session.permissions.includes('request.create') &&
+      <StatusProjectionPane key={state.session.session_id} manager={manager} projection={state.statusProjection} language={language}/>}
+    </>;
 }
 function SessionPane({manager, state, copy}: {manager: SessionManager; state: Snapshot; copy: Copy}) {
   const session = state.session!;
@@ -66,7 +71,7 @@ function SessionPane({manager, state, copy}: {manager: SessionManager; state: Sn
       [copy.sessionId, session.session_id], [copy.authRevision, session.authorization_revision], [copy.expires, session.validity.not_after],
       [copy.permissions, <ul className="permission-list">{session.permissions.map(p => <li key={p}>{p}</li>)}</ul>]]}/></>;
 }
-const fallback: Snapshot = Object.freeze({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,obsCatalog:null,obsCommand:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, controlAction: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
+const fallback: Snapshot = Object.freeze({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,obsCatalog:null,obsCommand:null,statusProjection:emptyStatusProjection,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,busy: false, session: null, loginLabel: '', devices: [], selected: null, control: null, controlAction: null, command: null, evidence: null, lastRead: null, catalogRevision: null, notice: null});
 const noopSubscribe = () => () => {}, fallbackSnapshot = () => fallback;
 export default function App({site, manager}: {site: Site | null; manager: SessionManager | null}) {
   const state = useSyncExternalStore(manager?.subscribe ?? noopSubscribe, manager?.getSnapshot ?? fallbackSnapshot);

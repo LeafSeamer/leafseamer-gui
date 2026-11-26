@@ -9,6 +9,8 @@ import type {RunView} from './draft-actions.ts';
 import type {DraftRecord,DraftRecovery,PublishedVersion,PublicationPreparation,PublicationHistory,PublicationProof} from './draft-actions.ts';
 import {createObsActions} from './obs-actions.ts';
 import type {ObsCommand,SceneCatalog} from './obs-actions.ts';
+import {createStatusSubscription, emptyStatusProjection} from './status-subscription.ts';
+import type {StatusProjection} from './status-subscription.ts';
 
 export type Session = Extract<Results['controller']['login'], {status: '201'}>['body']['data'];
 export type Device = Extract<Results['controller']['listDevices'], {status: '200'}>['body']['data']['items'][number];
@@ -21,10 +23,10 @@ export {validateSite} from './site.ts';
 export type {Site} from './site.ts';
 export type Notice = 'binding_pending' | 'binding_not_found' | 'invalid_binding' | 'recovery_cleanup' | 'invalid_draft' | 'draft_pending' | 'draft_not_found' | 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_run' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
 export type Snapshot = Readonly<{busy: boolean; session: Session | null; loginLabel: string; devices: readonly Device[]; selected: string | null;
-  obsCatalog:SceneCatalog|null;obsCommand:ObsCommand|null;
+  obsCatalog:SceneCatalog|null;obsCommand:ObsCommand|null;statusProjection:StatusProjection;
   bindingCandidate:BindingCandidate|null;bindingApproval:BindingApproval|null;bindingPreparation:BindingPreparation|null;bindingRecovery:BindingRecovery|null;bindingHistorical:boolean;capabilities:Capabilities|null;capabilitiesReadAt:string|null;draft:DraftRecord|null;draftRecovery:DraftRecovery|null;draftHistorical:boolean;publicationPreparation:PublicationPreparation|null;publishedVersion:PublishedVersion|null;publicationHistory:PublicationHistory|null;publicationProof:PublicationProof|null;runView:RunView|null;control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
 const empty = (): Snapshot => Object.freeze({busy: false, session: null, loginLabel: '', devices: Object.freeze([]), selected: null,
-  obsCatalog:null,obsCommand:null,
+  obsCatalog:null,obsCommand:null,statusProjection:emptyStatusProjection,
   bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
 class Rejected extends Error { code: Notice; constructor(code: Notice) { super(code); this.code = code; } }
 function accept(status: string, expected: string): void {
@@ -43,7 +45,7 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
   const sameScope = (scope: Command['scope']) => scope.authority_service_id === audience && scope.database_instance_id === database;
   const sameRef = (a: Command['state_ref'], b: Command['state_ref']) => a.id === b.id && a.revision === b.revision && a.digest === b.digest;
   const publish = (patch: Partial<Snapshot>) => { current = Object.freeze({...current,...(Object.hasOwn(patch,'draft')&&patch.draft?.definition_id!==current.draft?.definition_id?{bindingCandidate:null,bindingPreparation:null}:{}), ...patch}); for (const fn of listeners) fn(); };
-  const clearLocal = (notice: Notice | null = 'local_cleared', preserveRecovery = false) => { generation++; tokenScopes = []; tokenExpires = 0; resetEvidence(); controlActions.reset(preserveRecovery); obsActions.reset(preserveRecovery||current.obsCommand!==null); client.clearLocalState(); current = empty(); publish({notice}); };
+  const clearLocal = (notice: Notice | null = 'local_cleared', preserveRecovery = false) => { generation++; tokenScopes = []; tokenExpires = 0; resetEvidence(); controlActions.reset(preserveRecovery); obsActions.reset(preserveRecovery||current.obsCommand!==null); statusSubscription.reset(); client.clearLocalState(); current = empty(); publish({notice}); };
   async function action(run: (alive: () => void) => Promise<void>) {
     if (current.busy) return;
     const version = generation, alive = () => { if (version !== generation) throw new Error('session_generation'); };
@@ -64,6 +66,30 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     if (response.status === '201' && Number.isSafeInteger(response.body?.data.expires_in) && response.body.data.expires_in > 0) {
       tokenScopes = [...scopes]; tokenExpires = started + response.body.data.expires_in * 1000;
     }
+  }
+  async function statusHttp<T extends {status:string}>(signal:AbortSignal, request:()=>Promise<T>) {
+    const version = generation, after = performance.now()+4000;
+    const alive = () => {
+      signal.throwIfAborted();
+      if (version !== generation || !current.session) throw new Error('session_generation');
+    };
+    while (current.busy && performance.now() < after) {
+      alive();
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    alive();
+    if (current.busy) throw new Error('status_session_busy');
+    publish({busy:true});
+    try {
+      await token(['status.read','request.create'],alive);
+      const result = await request();
+      if (version !== generation || !current.session) throw new Error('session_generation');
+      if (result.status === '401') clearLocal('unauthorized',true);
+      return result;
+    } catch (error) {
+      if (version === generation && error instanceof Rejected && error.code === 'unauthorized') clearLocal('unauthorized',true);
+      throw error;
+    } finally { if (version === generation) publish({busy:false}); }
   }
   async function readControl(id: string, alive: () => void) {
     publish({selected: id, control: null}); await token(['control.read'], alive);
@@ -100,6 +126,8 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
   const bindingActions=createBindingActions({site,client,storage:recoveryStorage,state:()=>current,publish,action,accept,fail(code):never{throw new Rejected(code);}});
   const obsActions=createObsActions({site,client,storage:recoveryStorage,state:()=>current,publish,action,token,accept,clearEvidence:resetEvidence,
     fail(code):never{throw new Rejected(code);}});
+  const statusSubscription=createStatusSubscription({site,client,session:()=>current.session,http:statusHttp,
+    publish:statusProjection=>publish({statusProjection})});
   return Object.freeze({
     ...bindingActions.api,
     ...draftActions.api,
@@ -108,8 +136,11 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     getSnapshot: () => current,
     subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; },
     clearLocal,
+    startStatusProjection:statusSubscription.start,
+    stopStatusProjection:statusSubscription.stop,
     leavePage: () => clearLocal('local_cleared', true),
     login(login: string, password: string) { return action(async alive => {
+      statusSubscription.reset();
       tokenScopes = []; tokenExpires = 0;
       publish({...empty(), busy: true});
       const response = await client.login({login, password}); alive(); accept(response.status, '201');
@@ -174,6 +205,7 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     }); },
     selectDevice(id: string) { return action(async alive => { if (!current.devices.some(d => d.device_id === id)) throw new Rejected('stale'); publish({selected:id,control:null,capabilities:null,capabilitiesReadAt:null,obsCatalog:null}); if(current.session?.permissions.includes('control.read'))await readControl(id, alive); }); },
     refreshSession() { return action(async alive => {
+      statusSubscription.reset();publish({statusProjection:emptyStatusProjection});
       tokenScopes = []; tokenExpires = 0;
       const response = await client.refresh(crypto.randomUUID()); alive(); accept(response.status, '200');
       if (response.status === '200') { resetEvidence(); publish({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,obsCatalog:null,obsCommand:null,draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,session: response.body.data, devices: Object.freeze([]), selected: null, control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); controlActions.restore(response.body.data);draftActions.restore(response.body.data);bindingActions.restore(response.body.data);obsActions.restore(response.body.data); }
