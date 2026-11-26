@@ -5,17 +5,31 @@ import type {Notice,Session,Site,Snapshot} from './session.ts';
 import type {RecoveryStorage} from './control-actions.ts';
 import {createDirectedToken} from './directed-token.ts';
 export type DraftRecord=Extract<Results['seamer']['getDraft'],{status:'200'}>['body'];
-export type RunView=Readonly<{record:Extract<Results['seamer']['getRun'],{status:'200'}>['body'];readAt:string}>;
+type RunRecord=Extract<Results['seamer']['getRun'],{status:'200'}>['body'];
+export type RunView=Readonly<{record:RunRecord;readAt:string;source:'query'|'creation'}>;
 type Content=Inputs['seamer']['createDefinition']['body']['content'];
 type Metadata=Inputs['seamer']['createDefinition']['body']['metadata'];
 export type PublishedVersion=Extract<Results['seamer']['publishDefinition'],{status:'201'}>['body'];
+export type RunSource=Readonly<Pick<PublishedVersion,'definition_id'|'definition_version'|'artifact_ref'>>;
 export type PublicationPreparation=Readonly<{definition_id:string;revision:string;content_digest:string;selection_digest:string}>;
 export type PublicationHistory=Readonly<{definition_id:string;definition_version:string;artifact:Extract<Results['seamer']['getPublishedArtifact'],{status:'200'}>['body'];program:Extract<Results['seamer']['getCompiledProgram'],{status:'200'}>['body'];read_at:string}>;
 export type PublicationProof=Readonly<{ref:PublicationHistory['artifact']['proof_refs'][number];value:Extract<Results['seamer']['getIndependenceProof'],{status:'200'}>['body']}>;
-export type DraftRecovery=Readonly<{format:'leafseamer.gui.draft-request/1'|'leafseamer.gui.draft-request/2';publication?:PublicationPreparation;scope:DraftRecord['scope'];actor:Pick<Session,'issuer_id'|'issuer_epoch'|'principal_id'>;
+export type DraftRecovery=Readonly<{format:'leafseamer.gui.draft-request/1'|'leafseamer.gui.draft-request/2'|'leafseamer.gui.draft-request/3';publication?:PublicationPreparation;run?:RunSource;scope:DraftRecord['scope'];actor:Pick<Session,'issuer_id'|'issuer_epoch'|'principal_id'>;
  request_epoch:string;definition_id:string|null;lookup:Inputs['seamer']['lookupAutomationRequest']['body'];request_digest:string}>;
 const id=(v:unknown)=>typeof v==='string'&&v.length>0&&v.length<=256&&/^[A-Za-z0-9._:/-]+$/.test(v);
 const exact=(v:object,keys:string)=>!!v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).sort().join(',')===keys;
+const revision=(value:string)=>/^[1-9][0-9]{0,19}$/.test(value);
+const sameArtifact=(a:RunSource['artifact_ref'],b:RunSource['artifact_ref'])=>
+ a.kind===b.kind&&a.object_id===b.object_id&&a.revision===b.revision&&a.digest===b.digest&&
+ a.scope.authority_service_id===b.scope.authority_service_id&&a.scope.database_instance_id===b.scope.database_instance_id;
+export function runSource(state:Snapshot,site:Site):RunSource|null{
+ const history=state.publicationHistory,target=site.seamer;
+ if(history&&target)return {definition_id:history.definition_id,definition_version:history.definition_version,
+  artifact_ref:{kind:'artifact',scope:{authority_service_id:target.service_id,database_instance_id:target.database_instance_id},
+   object_id:history.artifact.artifact_id,revision:'1',digest:history.artifact.manifest_digest}};
+ const published=state.publishedVersion;
+ return published?{definition_id:published.definition_id,definition_version:published.definition_version,artifact_ref:published.artifact_ref}:null;
+}
 export function createDraftActions({site,client,storage,state,publish,action,accept,fail}:{site:Site;client:BrowserSessionClient;storage:RecoveryStorage|null;state:()=>Snapshot;
  publish:(patch:Partial<Snapshot>)=>void;action:(run:(alive:()=>void)=>Promise<void>)=>Promise<void>;accept:(status:string,expected:string)=>void;fail:(code:Notice)=>never}){
  const target=site.seamer,remote=target?client.createDraftClient({baseUrl:target.base_url,audience:target.service_id}):null;
@@ -31,12 +45,22 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
   directedToken.reset();corrupt=false;if(!target)return;
   try{
    const raw=storage?.getItem(key(session));if(!raw)return;if(raw.length>8192)throw new Error('shape');const v=JSON.parse(raw) as DraftRecovery;
-   if(!exact(v,v.format==='leafseamer.gui.draft-request/2'?'actor,definition_id,format,lookup,publication,request_digest,request_epoch,scope':'actor,definition_id,format,lookup,request_digest,request_epoch,scope')||!['leafseamer.gui.draft-request/1','leafseamer.gui.draft-request/2'].includes(v.format)||!exact(v.scope,'authority_service_id,database_instance_id')||!sameScope(v.scope)||
+   const keys={
+    'leafseamer.gui.draft-request/1':'actor,definition_id,format,lookup,request_digest,request_epoch,scope',
+    'leafseamer.gui.draft-request/2':'actor,definition_id,format,lookup,publication,request_digest,request_epoch,scope',
+    'leafseamer.gui.draft-request/3':'actor,definition_id,format,lookup,request_digest,request_epoch,run,scope',
+   } as const;
+   if(!Object.hasOwn(keys,v.format)||!exact(v,keys[v.format])||!exact(v.scope,'authority_service_id,database_instance_id')||!sameScope(v.scope)||
     !exact(v.actor,'issuer_epoch,issuer_id,principal_id')||!sameActor(v.actor,session)||!id(v.request_epoch)||!exact(v.lookup,'context_id,idempotency_key,operation_id')||
-    !Object.values(v.lookup).every(id)||!['createDefinition','updateDraft','updateDefinitionMetadata','publishDefinition'].includes(v.lookup.operation_id)||
+    !Object.values(v.lookup).every(id)||!['createDefinition','updateDraft','updateDefinitionMetadata','publishDefinition','createRun'].includes(v.lookup.operation_id)||
     (v.lookup.operation_id==='createDefinition'?v.definition_id!==null:!id(v.definition_id))||!/^sha256:[0-9a-f]{64}$/.test(v.request_digest))throw new Error('shape');
    if(v.lookup.operation_id==='publishDefinition'){
     const p=v.publication;if(v.format!=='leafseamer.gui.draft-request/2'||!p||!exact(p,'content_digest,definition_id,revision,selection_digest')||p.definition_id!==v.definition_id||!/^[1-9][0-9]{0,19}$/.test(p.revision)||![p.content_digest,p.selection_digest].every(value=>/^sha256:[0-9a-f]{64}$/.test(value)))throw new Error('shape');
+   }else if(v.lookup.operation_id==='createRun'){
+    const r=v.run;
+    if(v.format!=='leafseamer.gui.draft-request/3'||!r||!exact(r,'artifact_ref,definition_id,definition_version')||r.definition_id!==v.definition_id||!revision(r.definition_version)||
+     !exact(r.artifact_ref,'digest,kind,object_id,revision,scope')||r.artifact_ref.kind!=='artifact'||!id(r.artifact_ref.object_id)||!revision(r.artifact_ref.revision)||
+     !/^sha256:[0-9a-f]{64}$/.test(r.artifact_ref.digest)||!exact(r.artifact_ref.scope,'authority_service_id,database_instance_id')||!sameScope(r.artifact_ref.scope))throw new Error('shape');
    }else if(v.format!=='leafseamer.gui.draft-request/1')throw new Error('shape');
    publish({draftRecovery:v});
   }catch{corrupt=true;publish({notice:'recovery_unavailable'});}
@@ -47,24 +71,36 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
  }
  function finish(){try{if(!storage)throw new Error('storage');storage.removeItem(key(state().session!));if(storage.getItem(key(state().session!))!==null)throw new Error('storage');}catch{fail('recovery_cleanup');}publish({draftRecovery:null});}
  const token=directedToken.ensure;
+ async function writeContext(operations:string[],alive:()=>void){
+  const response=await ready().createRequestContext({operations,ttl_ms:60000,max_unique_requests:1});
+  alive();accept(response.status,'201');if(response.status!=='201')return fail('incompatible');
+  const context=response.body.data,session=state().session!;
+  if(response.body.service_id!==target!.service_id||context.service_id!==target!.service_id||context.audience!==target!.service_id||!sameActor(context,session)||
+   context.selection.contract_id!==contractSelection.contract_id||context.selection.contract_digest!==contractSelection.contract_digest)fail('incompatible');
+  return {context,session};
+ }
  function record(value:DraftRecord,expected:string|null){if(!sameScope(value.scope)||expected!==null&&value.definition_id!==expected)fail('incompatible');return value;}
+ function adoptRunCreation(value:RunRecord,expected:RunSource){
+  if(!sameScope(value.scope)||value.definition_id!==expected.definition_id||value.definition_version!==expected.definition_version||
+   !sameArtifact(value.artifact_ref,expected.artifact_ref)||value.lifecycle!=='disarmed'||value.dispatch_eligible||value.revision!=='1'||
+   value.arm_generation!=='0'||value.active_execution_id!==null||value.active_operation_id!==null||value.last_execution_id!==null||
+   value.pause_latches.length!==0)fail('incompatible');
+  publish({runView:{record:value,source:'creation',readAt:new Date().toISOString()}});
+ }
  function parse(text:string):Content{try{if(new TextEncoder().encode(text).length>4194304)throw new Error('size');const v=JSON.parse(text);validateAutomationModel('LifecycleDraftContent',v);return v;}catch{return fail('invalid_draft');}}
- async function write(operation:Exclude<DraftChangeOperation,'publishDefinition'>,text:string|null,metadata:Metadata|null,alive:()=>void){
+ async function write(operation:Exclude<DraftChangeOperation,'publishDefinition'|'createRun'>,text:string|null,metadata:Metadata|null,alive:()=>void){
   if(corrupt)fail('recovery_unavailable');if(state().draftRecovery)fail('draft_pending');
   publish({publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});
   const draft=state().draft;if(operation!=='createDefinition'&&(!draft||state().draftHistorical))fail('stale');
   const content=text===null?null:parse(text);
   try{if(metadata)validateAutomationModel('LifecycleDefinitionMetadata',metadata);}catch{fail('invalid_draft');}
   await token(['definition.edit','definition.read','request.create','request.read'],alive);
-  const response=await ready().createRequestContext({operations:[operation,'getDraft'],ttl_ms:60000,max_unique_requests:1});alive();accept(response.status,'201');if(response.status!=='201')return;
-  const context=response.body.data,s=state().session!;
-  if(response.body.service_id!==target!.service_id||context.service_id!==target!.service_id||context.audience!==target!.service_id||!sameActor(context,s)||
-   context.selection.contract_id!==contractSelection.contract_id||context.selection.contract_digest!==contractSelection.contract_digest)fail('incompatible');
+  const {context,session:s}=await writeContext([operation,'getDraft'],alive);
   const requestContext={context_id:context.context_id,idempotency_key:crypto.randomUUID()};
   const prepared=await prepareDraftChange(operation==='createDefinition'?{operation,definition_id:null,scope:scope!,context,body:{context:requestContext,content:content!,metadata:metadata!}}:
    operation==='updateDraft'?{operation,definition_id:draft!.definition_id,scope:scope!,context,body:{context:requestContext,expected_draft_revision:draft!.revision,content:content!}}:
    {operation,definition_id:draft!.definition_id,scope:scope!,context,body:{context:requestContext,expected_metadata_revision:draft!.metadata_revision,metadata:metadata!}});alive();
-  if(prepared.operation==='publishDefinition')return fail('incompatible');
+  if(prepared.operation==='publishDefinition'||prepared.operation==='createRun')return fail('incompatible');
   save({format:'leafseamer.gui.draft-request/1',scope:scope!,actor:actor(s),request_epoch:context.context_epoch,definition_id:prepared.definition_id,lookup:prepared.lookup,request_digest:prepared.request_digest});
   const result=prepared.operation==='createDefinition'?await ready().createDefinition(prepared.body):prepared.operation==='updateDraft'?await ready().updateDraft(prepared.definition_id,prepared.body):await ready().updateDefinitionMetadata(prepared.definition_id,prepared.body);
   alive();accept(result.status,operation==='createDefinition'?'201':'200');if(result.status!=='200'&&result.status!=='201')return;
@@ -84,7 +120,26 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
    if(response.status!=='200')return;
    const record=response.body;
    if(record.run_id!==runId||!sameScope(record.scope))fail('incompatible');
-   publish({runView:{record,readAt:new Date().toISOString()}});
+   publish({runView:{record,source:'query',readAt:new Date().toISOString()}});
+  });},
+  createRun(selected:RunSource){return action(async alive=>{
+   if(corrupt)fail('recovery_unavailable');if(state().draftRecovery)fail('draft_pending');
+   const expected=runSource(state(),site);
+   if(!expected||selected.definition_id!==expected.definition_id||selected.definition_version!==expected.definition_version||
+    !sameArtifact(selected.artifact_ref,expected.artifact_ref))return fail('stale');
+   publish({runView:null});
+   await token(['run.manage','request.create'],alive);
+   const {context,session}=await writeContext(['createRun'],alive);
+   const prepared=await prepareDraftChange({operation:'createRun',definition_id:expected.definition_id,scope:scope!,context,
+    body:{context:{context_id:context.context_id,idempotency_key:crypto.randomUUID()},definition_id:expected.definition_id,
+     definition_version:expected.definition_version,expected_artifact_ref:expected.artifact_ref}});
+   alive();
+   if(prepared.operation!=='createRun')return fail('incompatible');
+   save({format:'leafseamer.gui.draft-request/3',scope:scope!,actor:actor(session),request_epoch:context.context_epoch,
+    definition_id:expected.definition_id,lookup:prepared.lookup,request_digest:prepared.request_digest,run:expected});
+   const response=await ready().createRun(prepared.body);
+   alive();accept(response.status,'201');
+   if(response.status==='201'){adoptRunCreation(response.body,expected);finish();}
   });},
   readDraft(definition:string){return action(async alive=>{if(!id(definition))fail('invalid_draft');publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});await token(['definition.read'],alive);const response=await ready().getDraft(definition);alive();accept(response.status,'200');if(response.status==='200')publish({draft:record(response.body,definition)});});},
   newDraft(){if(!state().busy&&!state().draftRecovery)publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,notice:null});},
@@ -101,9 +156,7 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
    const selected=state().publicationPreparation,draft=state().draft;
    if(!selected||!draft||state().draftHistorical||selected.definition_id!==draft.definition_id||selected.revision!==draft.revision||selected.content_digest!==draft.content_digest||selected.selection_digest!==draft.selection_digest)return fail('stale');
    await token(['definition.publish','definition.read','request.create','request.read'],alive);
-   const response=await ready().createRequestContext({operations:['publishDefinition','getDraft'],ttl_ms:60000,max_unique_requests:1});alive();accept(response.status,'201');if(response.status!=='201')return;
-   const context=response.body.data,s=state().session!;
-   if(response.body.service_id!==target!.service_id||context.service_id!==target!.service_id||context.audience!==target!.service_id||!sameActor(context,s)||context.selection.contract_id!==contractSelection.contract_id||context.selection.contract_digest!==contractSelection.contract_digest)fail('incompatible');
+   const {context,session:s}=await writeContext(['publishDefinition','getDraft'],alive);
    const prepared=await prepareDraftChange({operation:'publishDefinition',definition_id:selected.definition_id,scope:scope!,context,body:{context:{context_id:context.context_id,idempotency_key:crypto.randomUUID()},expected_draft_revision:selected.revision,expected_content_digest:selected.content_digest,expected_selection_digest:selected.selection_digest}});alive();if(prepared.operation!=='publishDefinition')return fail('incompatible');
    save({format:'leafseamer.gui.draft-request/2',scope:scope!,actor:actor(s),request_epoch:context.context_epoch,definition_id:selected.definition_id,lookup:prepared.lookup,request_digest:prepared.request_digest,publication:selected});publish({publicationPreparation:null});
    const result=await ready().publishDefinition(selected.definition_id,prepared.body);alive();accept(result.status,'201');if(result.status!=='201')return;
@@ -127,10 +180,14 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
    if(hash!==ref.digest||proof.program_digest!==history.artifact.program_digest||proof.bindings_digest!==history.artifact.bindings_digest||proof.graph_digest!==history.program.graph_digest||state().publicationHistory!==history)fail('incompatible');publish({publicationProof:{ref,value:proof}});
   });},
   lookupDraftRequest(){return action(async alive=>{
-   const saved=state().draftRecovery;if(!saved)return fail('draft_pending');await token(['request.read','definition.read'],alive);
+   const saved=state().draftRecovery;if(!saved)return fail('draft_pending');
+   await token(['request.read',saved.lookup.operation_id==='createRun'?'run.read':'definition.read'],alive);
    const result=await ready().lookupAutomationRequest(saved.lookup);alive();if(result.status==='404')fail('draft_not_found');accept(result.status,'200');if(result.status!=='200')return;
    if(result.body.operation_id!==saved.lookup.operation_id||result.body.request_digest!==saved.request_digest)return fail('incompatible');
-   if(saved.lookup.operation_id==='publishDefinition'){
+   if(saved.lookup.operation_id==='createRun'){
+    if(result.body.result.kind!=='RunRecord'||!saved.run)return fail('incompatible');
+    adoptRunCreation(result.body.result.value,saved.run);
+   }else if(saved.lookup.operation_id==='publishDefinition'){
     if(result.body.result.kind!=='PublishedVersion'||!saved.definition_id||!saved.publication)return fail('incompatible');const value=published(result.body.result.value,saved.definition_id,saved.publication.revision);if(value.published_by!==saved.actor.principal_id)fail('incompatible');
     publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:value,publicationHistory:null,publicationProof:null});
    }else{if(result.body.result.kind!=='DraftRecord')return fail('incompatible');publish({draft:record(result.body.result.value,saved.definition_id),draftHistorical:true,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});}finish();

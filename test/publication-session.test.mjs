@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {contractSelection as selection,prepareDraftChange} from '@leafseamer/sdk';
 import {digestAutomationValue as hash} from '@leafseamer/sdk/automation-program';
 import {createSessionManager,validateSite} from '../src/session.ts';
+import {runSource} from '../src/draft-actions.ts';
 const uuid=n=>`${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`;
 const site=validateSite({format:'leafseamer.gui.site/2',site_label:'测试',service_id:uuid('1'),database_instance_id:uuid('2'),selection,seamer:{service_label:'Seamer',service_id:uuid('3'),database_instance_id:uuid('4'),base_url:'https://seamer.invalid'}});
 const scope={authority_service_id:site.seamer.service_id,database_instance_id:site.seamer.database_instance_id};
@@ -13,16 +14,27 @@ async function fixture(){
  const compiled={dsl_version:'automation-program/0.1.0-draft.1',compiler_version:'test-compiler',definition_id:'definition',definition_version:'3',policy_ref:ref,program,input_bindings:[],action_bindings:[],alias_table:{ref:{...ref,digest:await hash([])},entries:[]},graph_digest:ref.digest};
  const artifact={artifact_version:'automation-program/0.1.0-draft.1',artifact_id:'artifact',program_digest:await hash(compiled),bindings_digest:await hash({input_bindings:[],action_bindings:[],alias_table:compiled.alias_table}),proof_refs:[],publisher_ref:ref,review_ref:ref};artifact.manifest_digest=await hash(artifact);
  const version={scope,definition_id:'definition',definition_version:'3',source_draft_revision:'2',artifact_ref:{kind:'artifact',scope,object_id:'artifact',revision:'1',digest:artifact.manifest_digest},program_digest:artifact.program_digest,bindings_digest:artifact.bindings_digest,published_by:'person'};
+ const run={scope,run_id:uuid('5'),definition_id:version.definition_id,definition_version:version.definition_version,
+  artifact_ref:version.artifact_ref,revision:'1',arm_generation:'0',lifecycle:'disarmed',dispatch_eligible:false,
+  active_execution_id:null,active_operation_id:null,last_execution_id:null,pause_latches:[],business_state:null,last_receive_seq:'1'};
  const session={issuer_id:'issuer',issuer_epoch:'epoch',principal_id:'person',permissions:[]},data=new Map(),calls=[];
  let saved,context,lose=false,revision='2';
  const storage={getItem:k=>data.get(k)??null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)};
  const remote={async issueToken(scopes){calls.push(['token',scopes]);return {status:'201'};},async getDraft(){return {status:'200',body:structuredClone(draft)};},
   async createRequestContext(body){calls.push(['context']);context={context_id:'context',service_id:site.seamer.service_id,audience:site.seamer.service_id,issuer_id:'issuer',issuer_epoch:'epoch',principal_id:'person',context_epoch:'epoch',selection,operations:body.operations};return {status:'201',body:{service_id:site.seamer.service_id,data:context}};},
   async publishDefinition(definition_id,body){calls.push(['publish',body]);const prepared=await prepareDraftChange({scope,context,operation:'publishDefinition',definition_id,body});saved={operation_id:'publishDefinition',request_digest:prepared.request_digest,result:{kind:'PublishedVersion',value:{...version,source_draft_revision:revision}}};if(lose)throw new Error('response_loss');return {status:'201',body:saved.result.value};},
+  async createRun(body){
+   calls.push(['createRun',body]);
+   const prepared=await prepareDraftChange({scope,context,operation:'createRun',definition_id:body.definition_id,body});
+   saved={operation_id:'createRun',request_digest:prepared.request_digest,result:{kind:'RunRecord',value:structuredClone(run)}};
+   if(lose)throw new Error('response_loss');
+   return {status:'201',body:saved.result.value};
+  },
+  async getRun(runId){calls.push(['getRun',runId]);return {status:'200',body:structuredClone(run)};},
   async lookupAutomationRequest(){calls.push(['lookup']);return {status:'200',body:saved};},async getPublishedArtifact(){calls.push(['artifact']);return {status:'200',body:structuredClone(artifact)};},async getCompiledProgram(){calls.push(['program']);return {status:'200',body:structuredClone(compiled)};}};
  const client={createDraftClient:()=>remote,clearLocalState(){},async login(){return {status:'201',body:{data:session}};},async refresh(){return {status:'200',body:{data:session}};}};
  const manager=createSessionManager(site,client,storage);await manager.login('person','synthetic-password');await manager.readDraft('definition');
- return {manager,remote,calls,data,storage,version,draft,artifact,compiled,saved:()=>saved,lose:()=>{lose=true;},wrongRevision:()=>{revision='1';}};
+ return {manager,remote,calls,data,storage,version,draft,artifact,compiled,run,client,saved:()=>saved,lose:()=>{lose=true;},wrongRevision:()=>{revision='1';}};
 }
 test('发布准备与取消不签发凭据；确认使用固定修订和发布权限，不假定连续版本',async()=>{
  const f=await fixture(),before=f.calls.length;await f.manager.preparePublication();assert.equal(f.calls.length,before);f.manager.cancelPublication();assert.equal(f.manager.getSnapshot().publicationPreparation,null);
@@ -61,4 +73,52 @@ test('发布成功后清理查原身份失败，保留已确认结果且不声�
  const f=await fixture(),remove=f.storage.removeItem;f.storage.removeItem=()=>{throw new Error('storage');};await f.manager.preparePublication();await f.manager.confirmPublication();
  assert.equal(f.manager.getSnapshot().notice,'recovery_cleanup');assert.deepEqual(f.manager.getSnapshot().publishedVersion,f.version);assert.ok(f.manager.getSnapshot().draftRecovery);
  f.storage.removeItem=remove;await f.manager.lookupDraftRequest();assert.equal(f.manager.getSnapshot().draftRecovery,null);assert.equal(f.calls.filter(call=>call[0]==='publish').length,1);
+});
+test('固定发布版本创建未布防运行，权限和读取结果各自独立',async()=>{
+ const f=await fixture();
+ await f.manager.readPublication('definition','3');
+ const selected=runSource(f.manager.getSnapshot(),site);
+ await f.manager.createRun({...selected,definition_version:'4'});
+ assert.equal(f.manager.getSnapshot().notice,'stale');
+ assert.equal(f.calls.some(([method])=>method==='createRun'),false);
+ await f.manager.createRun(selected);
+ const [,body]=f.calls.find(([method])=>method==='createRun');
+ assert.equal(body.definition_id,f.version.definition_id);
+ assert.equal(body.definition_version,f.version.definition_version);
+ assert.deepEqual(body.expected_artifact_ref,f.version.artifact_ref);
+ assert.deepEqual(f.calls.filter(([method])=>method==='token').at(-1)[1],['run.manage','request.create']);
+ assert.deepEqual(f.manager.getSnapshot().runView.record,f.run);
+ assert.equal(f.manager.getSnapshot().runView.source,'creation');
+ assert.equal(f.data.size,0);
+ await f.manager.readRun(f.run.run_id);
+ assert.equal(f.manager.getSnapshot().runView.source,'query');
+ assert.deepEqual(f.calls.filter(([method])=>method==='token').at(-1)[1],['run.read']);
+});
+test('重载后只用查原权限找回运行，错配回执保留原请求',async()=>{
+ const f=await fixture();
+ await f.manager.readPublication('definition','3');
+ const selected=runSource(f.manager.getSnapshot(),site);
+ f.lose();
+ await f.manager.createRun(selected);
+ assert.equal(f.manager.getSnapshot().session,null);
+ assert.equal(f.data.size,1);
+ const raw=[...f.data.values()][0];
+ for(const key of ['access_token','csrf','program','expected_artifact_ref','synthetic-password'])assert.equal(raw.includes(key),false);
+ assert.deepEqual(JSON.parse(raw).run,selected);
+ const reloaded=createSessionManager(site,f.client,f.storage);
+ await reloaded.login('person','synthetic-password');
+ assert.equal(reloaded.getSnapshot().draftRecovery.lookup.operation_id,'createRun');
+ const valid=f.saved();
+ f.remote.lookupAutomationRequest=async()=>({status:'200',body:{...valid,result:{kind:'RunRecord',value:{...f.run,definition_version:'4'}}}});
+ await reloaded.lookupDraftRequest();
+ assert.equal(reloaded.getSnapshot().notice,'incompatible');
+ assert.equal(reloaded.getSnapshot().runView,null);
+ assert.equal(f.data.size,1);
+ f.remote.lookupAutomationRequest=async()=>({status:'200',body:valid});
+ await reloaded.lookupDraftRequest();
+ assert.deepEqual(reloaded.getSnapshot().runView.record,f.run);
+ assert.equal(reloaded.getSnapshot().runView.source,'creation');
+ assert.deepEqual(f.calls.filter(([method])=>method==='token').at(-1)[1],['request.read','run.read']);
+ assert.equal(f.calls.filter(([method])=>method==='createRun').length,1);
+ assert.equal(f.data.size,0);
 });

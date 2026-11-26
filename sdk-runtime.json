@@ -1,6 +1,6 @@
 {
   "format": "leafseamer-gui-sdk/1",
-  "manifest_sha256": "976f572effdb2578373eba994731457091a47be43661a349e3350a2fba58e4a0",
+  "manifest_sha256": "daf6c360ba6080a02e596ddf65021d6d046626851b4af363cb52b9265e83b235",
   "selection": {
     "contract_id": "leafseamer.api.v1.product9",
     "contract_digest": "sha256:cef9830f5f8491dc056015f8bb18e6b0d97262957e344695e93df5af8bf298a5"

@@ -8,7 +8,7 @@ const lifecycleLabels={
 
 export function RunPane({manager,state,copy}:{manager:SessionManager;state:Snapshot;copy:Copy}){
  const [runId,setRunId]=useState(()=>state.runView?.record.run_id??'');
- const view=state.runView?.record.run_id===runId.trim()?state.runView:null;
+ const view=state.runView;
  const record=view?.record;
  return <section className="publication-pane" aria-labelledby="run-heading">
   <h2 id="run-heading">{copy.runStatus}</h2>
@@ -22,6 +22,7 @@ export function RunPane({manager,state,copy}:{manager:SessionManager;state:Snaps
   </form>
   {record&&view&&<div aria-live="polite">
    <dl className="facts">
+    <div className="fact"><dt>{copy.runId}</dt><dd>{record.run_id}</dd></div>
     <div className="fact"><dt>{copy.runLifecycle}</dt><dd>{copy[lifecycleLabels[record.lifecycle]]}</dd></div>
     <div className="fact"><dt>{copy.dispatchEligibility}</dt><dd>{record.dispatch_eligible?copy.dispatchEligible:copy.dispatchIneligible}</dd></div>
     <div className="fact"><dt>{copy.definitionId}</dt><dd>{record.definition_id}</dd></div>
@@ -31,7 +32,8 @@ export function RunPane({manager,state,copy}:{manager:SessionManager;state:Snaps
     <div className="fact"><dt>{copy.lastExecution}</dt><dd>{record.last_execution_id??copy.none}</dd></div>
     <div className="fact"><dt>{copy.pauseLatches}</dt><dd>{record.pause_latches.length}</dd></div>
    </dl>
-   <p className="muted">{copy.lastRead} <time dateTime={view.readAt}>{new Date(view.readAt).toLocaleString()}</time></p>
+   <p className="muted">{view.source==='creation'?copy.runCreationReceipt:copy.lastRead} <time dateTime={view.readAt}>{new Date(view.readAt).toLocaleString()}</time></p>
+   {view.source==='creation'&&<button disabled={state.busy} onClick={()=>{setRunId(record.run_id);void manager.readRun(record.run_id);}}>{copy.readCurrentRun}</button>}
   </div>}
  </section>;
 }

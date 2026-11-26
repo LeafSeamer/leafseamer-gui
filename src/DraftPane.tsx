@@ -47,6 +47,6 @@ export function DraftPane({site,manager,state,copy}:{site:Site;manager:SessionMa
    <button className="primary" disabled={state.busy} onClick={()=>void manager.lookupDraftRequest()}>{copy.lookupDraftRequest}</button></aside>}
   {state.draftHistorical&&<aside className="notice"><p>{copy.draftHistoricalHint}</p><button className="primary" disabled={state.busy} onClick={()=>void manager.readDraft(state.draft!.definition_id)}>{copy.readCurrentDraft}</button></aside>}
   <DraftEditor key={state.draft?[state.draft.definition_id,state.draft.revision,state.draft.metadata_revision,state.draftHistorical].join(':'):'new'} site={site} manager={manager} state={state} copy={copy}/>
-  <PublicationPane key={[state.draft?.definition_id,state.publishedVersion?.definition_id,state.publishedVersion?.definition_version].join(':')} manager={manager} state={state} copy={copy}/>
+  <PublicationPane key={[state.draft?.definition_id,state.publishedVersion?.definition_id,state.publishedVersion?.definition_version].join(':')} site={site} manager={manager} state={state} copy={copy}/>
  </section>;
 }
