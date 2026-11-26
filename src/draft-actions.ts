@@ -5,6 +5,7 @@ import type {Notice,Session,Site,Snapshot} from './session.ts';
 import type {RecoveryStorage} from './control-actions.ts';
 import {createDirectedToken} from './directed-token.ts';
 export type DraftRecord=Extract<Results['seamer']['getDraft'],{status:'200'}>['body'];
+export type RunView=Readonly<{record:Extract<Results['seamer']['getRun'],{status:'200'}>['body'];readAt:string}>;
 type Content=Inputs['seamer']['createDefinition']['body']['content'];
 type Metadata=Inputs['seamer']['createDefinition']['body']['metadata'];
 export type PublishedVersion=Extract<Results['seamer']['publishDefinition'],{status:'201'}>['body'];
@@ -75,6 +76,16 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
   if(!sameScope(value.scope)||value.definition_id!==definition||!sameScope(value.artifact_ref.scope)||value.artifact_ref.kind!=='artifact'||revision!==undefined&&value.source_draft_revision!==revision)fail('incompatible');return value;
  }
  return {restore,api:{
+  readRun(runId:string){return action(async alive=>{
+   publish({runView:null});
+   if(!id(runId))fail('invalid_run');
+   await token(['run.read'],alive);
+   const response=await ready().getRun(runId);alive();accept(response.status,'200');
+   if(response.status!=='200')return;
+   const record=response.body;
+   if(record.run_id!==runId||!sameScope(record.scope))fail('incompatible');
+   publish({runView:{record,readAt:new Date().toISOString()}});
+  });},
   readDraft(definition:string){return action(async alive=>{if(!id(definition))fail('invalid_draft');publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});await token(['definition.read'],alive);const response=await ready().getDraft(definition);alive();accept(response.status,'200');if(response.status==='200')publish({draft:record(response.body,definition)});});},
   newDraft(){if(!state().busy&&!state().draftRecovery)publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,notice:null});},
   createDraft(text:string,name:string,description:string){return action(alive=>write('createDefinition',text,{name,description,layout:{}},alive));},

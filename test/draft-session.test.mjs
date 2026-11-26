@@ -27,6 +27,29 @@ test('固定站点配置拒绝动态目标及CSP注入，旧版配置保持有�
  const {seamer,...old}=site;assert.equal(validateSite({...old,format:'leafseamer.gui.site/1'}).seamer,undefined);
  assert.equal(validateSite({...site,seamer:{...seamer,base_url:'https://seamer.invalid/services/fixed'}}).seamer.base_url,'https://seamer.invalid/services/fixed');
 });
+test('运行查询仅请求 run.read，并清除被拒绝或身份不符的结果',async()=>{
+ const f=fixture();await f.manager.login('person','synthetic-password');
+ const run_id=uuid('5'),body={run_id,scope,lifecycle:'paused',dispatch_eligible:false,revision:'2'};
+ f.remote.getRun=async id=>{f.calls.push(['run',id]);return {status:'200',body};};
+ await f.manager.readRun(run_id);
+ assert.deepEqual(f.calls,[['token',['run.read']],['run',run_id]]);
+ assert.deepEqual(f.manager.getSnapshot().runView.record,body);
+ for(const wrong of [{...body,run_id:uuid('6')},{...body,scope:{...scope,database_instance_id:uuid('7')}}]){
+  f.remote.getRun=async()=>({status:'200',body:wrong});
+  await f.manager.readRun(run_id);
+  assert.equal(f.manager.getSnapshot().runView,null);assert.equal(f.manager.getSnapshot().notice,'incompatible');
+ }
+ f.remote.getRun=async()=>({status:'403'});
+ await f.manager.readRun(run_id);
+ assert.equal(f.manager.getSnapshot().runView,null);assert.equal(f.manager.getSnapshot().notice,'forbidden');
+});
+test('页面离开后迟到的运行查询不能恢复结果',async()=>{
+ const f=fixture();await f.manager.login('person','synthetic-password');
+ const run_id=uuid('5'),entered=Promise.withResolvers(),release=Promise.withResolvers();
+ f.remote.getRun=async()=>{entered.resolve();await release.promise;return {status:'200',body:{scope,run_id}};};
+ const pending=f.manager.readRun(run_id);await entered.promise;f.manager.leavePage();release.resolve();await pending;
+ assert.equal(f.manager.getSnapshot().runView,null);assert.equal(f.manager.getSnapshot().session,null);
+});
 test('草稿创建绑定独立服务，成功后清理查原身份，无当前Controller权限也不伪拒远端权限',async()=>{
  const f=fixture();await f.manager.login('person','synthetic-password');await f.manager.createDraft(JSON.stringify(content),'草稿','描述');
  assert.equal(f.manager.getSnapshot().notice,null);assert.equal(f.manager.getSnapshot().draft.definition_id,'definition');assert.equal(f.manager.getSnapshot().draftRecovery,null);assert.equal(f.data.size,0);

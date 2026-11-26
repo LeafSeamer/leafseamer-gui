@@ -5,6 +5,7 @@ import type {ControlActionState, RecoveryStorage} from './control-actions.ts';
 import {createBindingActions} from './binding-actions.ts';
 import type {BindingCandidate,BindingApproval,BindingPreparation,BindingRecovery} from './binding-actions.ts';
 import {createDraftActions} from './draft-actions.ts';
+import type {RunView} from './draft-actions.ts';
 import type {DraftRecord,DraftRecovery,PublishedVersion,PublicationPreparation,PublicationHistory,PublicationProof} from './draft-actions.ts';
 import {createObsActions} from './obs-actions.ts';
 import type {ObsCommand,SceneCatalog} from './obs-actions.ts';
@@ -18,13 +19,13 @@ export type EvidencePage = Extract<Results['controller']['getCommandEvidence'], 
 import type {Site} from './site.ts';
 export {validateSite} from './site.ts';
 export type {Site} from './site.ts';
-export type Notice = 'binding_pending' | 'binding_not_found' | 'invalid_binding' | 'recovery_cleanup' | 'invalid_draft' | 'draft_pending' | 'draft_not_found' | 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
+export type Notice = 'binding_pending' | 'binding_not_found' | 'invalid_binding' | 'recovery_cleanup' | 'invalid_draft' | 'draft_pending' | 'draft_not_found' | 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_run' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
 export type Snapshot = Readonly<{busy: boolean; session: Session | null; loginLabel: string; devices: readonly Device[]; selected: string | null;
   obsCatalog:SceneCatalog|null;obsCommand:ObsCommand|null;
-  bindingCandidate:BindingCandidate|null;bindingApproval:BindingApproval|null;bindingPreparation:BindingPreparation|null;bindingRecovery:BindingRecovery|null;bindingHistorical:boolean;capabilities:Capabilities|null;capabilitiesReadAt:string|null;draft:DraftRecord|null;draftRecovery:DraftRecovery|null;draftHistorical:boolean;publicationPreparation:PublicationPreparation|null;publishedVersion:PublishedVersion|null;publicationHistory:PublicationHistory|null;publicationProof:PublicationProof|null;control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
+  bindingCandidate:BindingCandidate|null;bindingApproval:BindingApproval|null;bindingPreparation:BindingPreparation|null;bindingRecovery:BindingRecovery|null;bindingHistorical:boolean;capabilities:Capabilities|null;capabilitiesReadAt:string|null;draft:DraftRecord|null;draftRecovery:DraftRecovery|null;draftHistorical:boolean;publicationPreparation:PublicationPreparation|null;publishedVersion:PublishedVersion|null;publicationHistory:PublicationHistory|null;publicationProof:PublicationProof|null;runView:RunView|null;control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
 const empty = (): Snapshot => Object.freeze({busy: false, session: null, loginLabel: '', devices: Object.freeze([]), selected: null,
   obsCatalog:null,obsCommand:null,
-  bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
+  bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
 class Rejected extends Error { code: Notice; constructor(code: Notice) { super(code); this.code = code; } }
 function accept(status: string, expected: string): void {
   if (status === expected) return;
@@ -175,7 +176,7 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
     refreshSession() { return action(async alive => {
       tokenScopes = []; tokenExpires = 0;
       const response = await client.refresh(crypto.randomUUID()); alive(); accept(response.status, '200');
-      if (response.status === '200') { resetEvidence(); publish({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,obsCatalog:null,obsCommand:null,draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,session: response.body.data, devices: Object.freeze([]), selected: null, control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); controlActions.restore(response.body.data);draftActions.restore(response.body.data);bindingActions.restore(response.body.data);obsActions.restore(response.body.data); }
+      if (response.status === '200') { resetEvidence(); publish({bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,obsCatalog:null,obsCommand:null,draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,session: response.body.data, devices: Object.freeze([]), selected: null, control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null}); controlActions.restore(response.body.data);draftActions.restore(response.body.data);bindingActions.restore(response.body.data);obsActions.restore(response.body.data); }
     }); },
     logout() { return action(async alive => {
       let notice: Notice = 'logout_unconfirmed';

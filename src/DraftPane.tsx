@@ -3,6 +3,7 @@ import {BindingPane} from './BindingPane.tsx';
 import {BindingSelectionEditor} from './BindingSelectionEditor.tsx';
 import {StepEditor} from './StepEditor.tsx';
 import {ActionParameterEditor} from './ActionParameterEditor.tsx';
+import {RunPane} from './RunPane.tsx';
 import {useState} from 'react';
 import type {Copy} from './i18n.ts';
 import type {SessionManager,Site,Snapshot} from './session.ts';
@@ -39,6 +40,7 @@ export function DraftPane({site,manager,state,copy}:{site:Site;manager:SessionMa
  if(!site.seamer)return <section className="empty-service"><h1>{copy.noAutomation}</h1><p className="muted">{copy.noAutomationHint}</p></section>;
  return <section className="draft-pane"><div className="heading"><h1>{copy.automationDrafts}</h1><button disabled={state.busy||!!state.draftRecovery} onClick={()=>manager.newDraft()}>{copy.newDraft}</button></div>
   <p>{site.seamer.service_label}</p><p className="muted">{copy.draftHint}</p>
+  <RunPane manager={manager} state={state} copy={copy}/>
   <form className="command-search" onSubmit={e=>{e.preventDefault();void manager.readDraft(definition);}}><label htmlFor="definition-id">{copy.definitionId}</label>
    <input id="definition-id" value={definition} onChange={e=>setDefinition(e.target.value)} required maxLength={256}/><button className="primary" disabled={state.busy||!definition}>{copy.lookup}</button></form>
   {state.draftRecovery&&<aside className="notice" role="status"><p>{copy.draftUnknown}</p><p>{copy.draftRequestId}: {state.draftRecovery.lookup.idempotency_key}</p>
