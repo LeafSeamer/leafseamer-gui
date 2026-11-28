@@ -4,6 +4,8 @@ import type {Snapshot} from './session.ts';
 import type {DraftContent} from './binding-selection.ts';
 import {selectedEventSources} from './program-editor.ts';
 import type {ProgramEdit} from './program-editor.ts';
+import {conditionSources} from './condition-editor.ts';
+import {ConditionEditor} from './ConditionEditor.tsx';
 
 type Props={content:DraftContent;state:Snapshot;copy:Copy;locked:boolean;onEdit:(edit:ProgramEdit)=>void};
 function TransitionForm({content,state,copy,locked,onEdit,id}:{id:string}&Props){
@@ -22,6 +24,9 @@ function TransitionFields({content,state,copy,locked,onEdit,current}:Props&{curr
   <label htmlFor="transition-trigger">{copy.transitionTrigger}</label><select id="transition-trigger" value={trigger} onChange={e=>setTrigger(e.target.value)}><option value="">{copy.chooseEvent}</option>{current&&!events.some(e=>e.binding_id===current.trigger_binding_id)&&<option value={current.trigger_binding_id}>{copy.actionUnverified}: {current.trigger_binding_id}</option>}{events.map(e=><option key={e.binding_id} value={e.binding_id}>{e.binding_id}</option>)}</select>
   {!events.length&&<p className="muted">{copy.noEventSources}</p>}<p className="muted">{current?copy.transitionPreserve:copy.transitionDefaults}</p>
   <button disabled={locked||!from||!to||priority===''||!trigger||!current&&!id} onClick={()=>onEdit(current?{kind:'transition-configure',id:current.transition_id,from_state:from,to_state:to,priority:Number(priority),trigger_binding_id:trigger}:{kind:'transition-add',transition:{transition_id:id,from_state:from,to_state:to,priority:Number(priority),trigger_binding_id:trigger,condition:{kind:'literal',value:true},exit:[],transition:[],enter:[]}})}>{current?copy.updateTransition:copy.addTransitionPreview}</button>
+  {current&&<ConditionEditor label={copy.transitionCondition} condition={current.condition}
+   sources={conditionSources(content,state,{kind:'transition-condition',id:current.transition_id})} copy={copy} locked={locked}
+   onEdit={condition=>onEdit({kind:'transition-condition',id:current.transition_id,condition})}/>}
  </fieldset>;
 }
 export function ProgramStructurePanel(props:Props){
@@ -36,6 +41,8 @@ export function ProgramStructurePanel(props:Props){
     {events.map(event=><option key={event.binding_id} value={event.binding_id}>{event.binding_id}</option>)}
    </select>
    {events.length===0&&<p className="muted">{copy.noEventSources}</p>}
+   <ConditionEditor label={copy.ruleCondition} condition={p.condition} sources={conditionSources(content,props.state,{kind:'rule-condition'})}
+    copy={copy} locked={locked} onEdit={condition=>onEdit({kind:'rule-condition',condition})}/>
    <p className="muted">{copy.groupManagementHint}</p><ol className="group-list" aria-label={copy.ruleGroups}>{p.groups.map((g,i)=><li key={i} data-group-index={i}><strong>{copy.ruleGroup} {i+1} · {g.steps.length} {copy.stepCount}</strong><select aria-label={copy.groupMode+' '+(i+1)} value={g.mode} disabled={locked} onChange={e=>onEdit({kind:'group-mode',index:i,mode:e.target.value as 'sequence'|'parallel'})}><option value="sequence">{copy.stepsSequence}</option><option value="parallel">{copy.stepsParallel}</option></select><div className="actions"><button disabled={locked||i===0} onClick={()=>onEdit({kind:'group-move',index:i,direction:-1})}>{copy.moveGroupUp}</button><button disabled={locked||i===p.groups.length-1} onClick={()=>onEdit({kind:'group-move',index:i,direction:1})}>{copy.moveGroupDown}</button><button disabled={locked||p.groups.length===1} onClick={()=>onEdit({kind:'group-remove',index:i})}>{copy.removeGroup}</button></div></li>)}</ol>
   </details>;
  }

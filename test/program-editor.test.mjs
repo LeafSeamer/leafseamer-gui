@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {editProgram,applyProgramPreview} from '../src/program-editor.ts';
+import {conditionSources} from '../src/condition-editor.ts';
 import {source,ref,step,delay,input,reference} from '../../leafseamer/test/automation-program-fixture.mjs';
 import {compileProgram} from '../../leafseamer/dist/automation-compiler.mjs';
 
@@ -12,6 +13,74 @@ function fixture(){
 }
 const transition=(id,extra={})=>({transition_id:id,from_state:'idle',to_state:'running',priority:0,trigger_binding_id:'trigger',condition:{kind:'literal',value:true},exit:[],transition:[],enter:[],...extra});
 const machine=f=>{f.content.program={kind:'state_machine',states:['idle','running'],initial_state:'idle',transitions:[transition('start',{exit:[step('first')],enter:[step('second')]})]};return f;};
+function addInput(f,value,selected=true){
+ const selection={kind:'input',binding_id:value.binding_id,content_ref:ref};
+ f.state.bindingApproval.bundle.bindings.push({...selection,value});
+ f.model.input_bindings.push(value);
+ if(selected)f.content.selections.push(selection);
+}
+const exists=(id,source='event')=>({kind:'exists',value:reference(id,source)});
+test('复合规则与转换条件进入同一草稿预览，保留其它字段且通过实际编译器',()=>{
+ const condition={kind:'all',items:[exists('trigger'),{kind:'not',item:{kind:'any',items:[
+  {kind:'is_null',value:reference()},
+  {kind:'compare',operator:'eq',value_type:{kind:'boolean',unit:null},left:reference(),right:{kind:'literal',value:false}},
+ ]}}]};
+ for(const f of [fixture(),machine(fixture())]){
+  const before=f.text(),rule=f.content.program.kind==='rule';
+  const edit=rule?{kind:'rule-condition',condition}:{kind:'transition-condition',id:'start',condition};
+  const preview=f.edit(edit),result=JSON.parse(preview);
+  const expected=structuredClone(f.content);
+  if(rule)expected.program.condition=condition;else expected.program.transitions[0].condition=condition;
+  assert.deepEqual(result,expected);
+  compileProgram({...f.model,program:result.program});
+  assert.equal(applyProgramPreview(before,preview,f.state),preview);
+  assert.throws(()=>applyProgramPreview(before,preview,{...f.state,bindingHistorical:true}),{code:'stepEditSource'});
+  assert.equal(f.text(),before);
+ }
+});
+test('条件引用在预览和应用时核对精确批准、投影类型、单位与表达式边界',()=>{
+ const f=fixture();
+ const meter=input('meter','observation');
+ meter.projections[0].value_type={kind:'binary64',unit:'dB'};
+ addInput(f,meter,false);
+ const condition={kind:'compare',operator:'gte',value_type:{kind:'binary64',unit:'dB'},left:reference('meter','observation'),right:{kind:'literal',value:-20}};
+ const edit={kind:'rule-condition',condition};
+ assert.throws(()=>f.edit(edit),{code:'stepEditSource'});
+ f.content.selections.push({kind:'input',binding_id:'meter',content_ref:ref});
+ const original=f.text(),preview=f.edit(edit);
+ compileProgram({...f.model,program:JSON.parse(preview).program});
+ for(const bad of [{...condition,value_type:{...condition.value_type,unit:'ms'}},
+  {...condition,right:{kind:'literal',value:'-20'}},
+  {...condition,operator:'lt',value_type:{kind:'boolean',unit:null},left:reference(),right:{kind:'literal',value:true}},
+  Array.from({length:17}).reduce(item=>({kind:'not',item}),{kind:'literal',value:true}),
+  {kind:'all',items:Array.from({length:256},()=>({kind:'literal',value:true}))}]){
+  assert.throws(()=>f.edit({...edit,condition:bad}),{code:'stepEditCondition'});
+ }
+ assert.throws(()=>f.edit({...edit,condition:{...condition,left:{...condition.left,pointer:'/unknown'}}}),{code:'stepEditSource'});
+ const wrongRef={...f.state,bindingApproval:structuredClone(f.state.bindingApproval)};
+ wrongRef.bindingApproval.bundle.bindings.at(-1).content_ref={...ref,revision:'2'};
+ assert.throws(()=>applyProgramPreview(original,preview,wrongRef),{code:'stepEditSource'});
+});
+test('动作条件允许同分支早期结果，拒绝同并行组、反向与跨转换结果',()=>{
+ const f=fixture();addInput(f,input('result','step_result','first'));
+ const guard=exists('result','step_result'),target={kind:'step-guard',step_id:'second'};
+ assert.deepEqual(conditionSources(f.content,f.state,target).map(item=>item.ref.binding_id),['trigger','result']);
+ const preview=f.edit({...target,condition:guard});
+ const expected=structuredClone(f.content);expected.program.groups[0].steps[1].guard=guard;
+ assert.deepEqual(JSON.parse(preview),expected);
+ compileProgram({...f.model,program:expected.program});
+ assert.equal(applyProgramPreview(f.text(),preview,f.state),preview);
+ assert.throws(()=>f.edit({kind:'rule-condition',condition:guard}),{code:'stepEditDependency'});
+ assert.throws(()=>f.edit({...target,step_id:'first',condition:guard}),{code:'stepEditDependency'});
+ f.content.program.groups[0].mode='parallel';
+ assert.throws(()=>f.edit({...target,condition:guard}),{code:'stepEditDependency'});
+ const m=machine(f);m.content.program.transitions[0].enter=[];
+ m.content.program.transitions.push(transition('return',{transition:[step('second')]}));
+ assert.throws(()=>m.edit({...target,condition:guard}),{code:'stepEditDependency'});
+ const retained=fixture();retained.content.program.condition=exists('old');
+ assert.doesNotThrow(()=>retained.edit({kind:'delay',step_id:'wait',delay_ms:1,max_lateness_ms:1},
+  JSON.stringify({...retained.content,program:{...retained.content.program,groups:[{mode:'sequence',steps:[delay('wait')]}]}})));
+});
 test('规则触发器只采用当前批准且精确选择的事件，修改保留原条件和步骤',()=>{
  const f=fixture(),alternate=input('alternate'),selection={kind:'input',binding_id:alternate.binding_id,content_ref:ref};
  f.state.bindingApproval.bundle.bindings.push({...selection,value:alternate});

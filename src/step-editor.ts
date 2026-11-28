@@ -7,7 +7,7 @@ import {selectedActionSources,parseParameterJson} from './action-editor.ts';
 
 export type Step=AutomationModels['Step'];
 export class StepEditError extends Error{
- code:'stepEditInvalid'|'stepEditDependency'|'stepEditSource'|'stepEditStale';
+ code:'stepEditInvalid'|'stepEditDependency'|'stepEditSource'|'stepEditStale'|'stepEditCondition';
  constructor(code:StepEditError['code']){super(code);this.code=code;}
 }
 const need=(ok:unknown,code:StepEditError['code'])=>{if(!ok)throw new StepEditError(code);};

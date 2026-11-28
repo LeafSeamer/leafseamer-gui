@@ -6,9 +6,12 @@ import type {DraftContent} from './binding-selection.ts';
 import {selectedActionSources} from './action-editor.ts';
 import {checkStepStructure,stepContainers,stepPositions,applyStepPreview,StepEditError} from './step-editor.ts';
 import type {Step} from './step-editor.ts';
+import {checkChangedConditions} from './condition-editor.ts';
+import type {Condition,ConditionTarget} from './condition-editor.ts';
 
 type Mode='sequence'|'parallel';
 export type ProgramEdit=
+ |(ConditionTarget&{condition:Condition})
  |{kind:'rule-trigger';trigger_binding_id:string}
  |{kind:'group-add';mode:Mode;step:Step}
  |{kind:'group-remove';index:number}
@@ -36,7 +39,7 @@ export function checkNewTriggers(before:DraftContent,after:DraftContent,state:Sn
 }
 export function applyProgramPreview(base:string,preview:string,state:Snapshot):string{
  const result=applyStepPreview(base,preview,state),before=parseSelectionContent(base),after=parseSelectionContent(result);
- checkProgramStates(after);checkNewTriggers(before,after,state);return result;
+ checkProgramStates(after);checkNewTriggers(before,after,state);checkChangedConditions(before,after,state);return result;
 }
 export function editProgram(text:string,state:Snapshot,edit:ProgramEdit):string{
  need(!state.busy&&!state.draftHistorical&&!state.draftRecovery&&!state.bindingRecovery&&!state.bindingPreparation,'stepEditStale');
@@ -44,6 +47,9 @@ export function editProgram(text:string,state:Snapshot,edit:ProgramEdit):string{
  if(edit.kind==='rule-trigger'){
   if(p.kind!=='rule')throw new StepEditError('stepEditInvalid');
   program={...p,trigger_binding_id:edit.trigger_binding_id};
+ }else if(edit.kind==='rule-condition'){
+  if(p.kind!=='rule')throw new StepEditError('stepEditInvalid');
+  program={...p,condition:edit.condition};
  }else if(edit.kind==='group-add'||edit.kind==='group-remove'||edit.kind==='group-move'||edit.kind==='group-mode'){
   need(p.kind==='rule');if(p.kind!=='rule')throw new StepEditError('stepEditInvalid');const groups=[...p.groups];
   if(edit.kind==='group-add'){
@@ -56,11 +62,15 @@ export function editProgram(text:string,state:Snapshot,edit:ProgramEdit):string{
    else{const to=edit.index+edit.direction;need(to>=0&&to<groups.length);[groups[edit.index],groups[to]]=[groups[to],groups[edit.index]];}
   }
   program={...p,groups};
- }else if(edit.kind==='relocate'||edit.kind==='delay'){
+ }else if(edit.kind==='relocate'||edit.kind==='delay'||edit.kind==='step-guard'){
   const positions=stepPositions(content),entry=positions.find(n=>n.step.step_id===edit.step_id);need(entry,'stepEditStale');need(new Set(positions.map(n=>n.step.step_id)).size===positions.length);
   const changes=new Map<string,readonly Step[]>(),containers=stepContainers(content),from=containers.find(c=>c.path===entry!.path)!;
   const steps=[...from.steps];
   if(edit.kind==='delay'){need(entry!.step.kind==='delay');steps[entry!.index]={...entry!.step,delay_ms:edit.delay_ms,max_lateness_ms:edit.max_lateness_ms} as Step;changes.set(from.path,steps);}
+  else if(edit.kind==='step-guard'){
+   if(entry!.step.kind!=='action')throw new StepEditError('stepEditInvalid');
+   steps[entry!.index]={...entry!.step,guard:edit.condition};changes.set(from.path,steps);
+  }
   else{
    const to=containers.find(c=>c.path===edit.container);need(to,'stepEditStale');steps.splice(entry!.index,1);const target=from.path===to!.path?steps:[...to!.steps];
    need(Number.isInteger(edit.index)&&edit.index>=0&&edit.index<=target.length);target.splice(edit.index,0,entry!.step);changes.set(from.path,steps);changes.set(to!.path,target);
@@ -79,9 +89,14 @@ export function editProgram(text:string,state:Snapshot,edit:ProgramEdit):string{
    need(edit.transition.exit.length===0&&edit.transition.transition.length===0&&edit.transition.enter.length===0);program={...p,transitions:[...p.transitions,structuredClone(edit.transition)]};
   }else{
    const index=p.transitions.findIndex(t=>t.transition_id===edit.id);need(index>=0,'stepEditStale');
-   program={...p,transitions:edit.kind==='transition-remove'?p.transitions.filter((_,i)=>i!==index):p.transitions.map((t,i)=>i!==index?t:{...t,from_state:edit.from_state,to_state:edit.to_state,priority:edit.priority,trigger_binding_id:edit.trigger_binding_id})};
+   if(edit.kind==='transition-remove')program={...p,transitions:p.transitions.filter((_,i)=>i!==index)};
+   else program={...p,transitions:p.transitions.map((t,i)=>{
+    if(i!==index)return t;
+    if(edit.kind==='transition-condition')return {...t,condition:edit.condition};
+    return {...t,from_state:edit.from_state,to_state:edit.to_state,priority:edit.priority,trigger_binding_id:edit.trigger_binding_id};
+   })};
   }
  }
  const updated={...content,program};try{validateAutomationModel('LifecycleDraftContent',updated);}catch{throw new StepEditError('stepEditInvalid');}
- checkProgramStates(updated);checkNewTriggers(content,updated,state);checkStepStructure(updated,state);const result=JSON.stringify(updated,null,2);parseSelectionContent(result);return result;
+ checkProgramStates(updated);checkNewTriggers(content,updated,state);checkStepStructure(updated,state);checkChangedConditions(content,updated,state);const result=JSON.stringify(updated,null,2);parseSelectionContent(result);return result;
 }

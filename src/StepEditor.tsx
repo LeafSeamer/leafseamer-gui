@@ -7,6 +7,8 @@ import {stepContainers,stepPositions,editSteps,newActionStep,StepEditError} from
 import type {Step} from './step-editor.ts';
 import {editProgram,applyProgramPreview} from './program-editor.ts';
 import {ProgramStructurePanel} from './ProgramStructurePanel.tsx';
+import {conditionSources} from './condition-editor.ts';
+import {ConditionEditor} from './ConditionEditor.tsx';
 
 function DelayFields({step,copy,locked,onChange}:{step:Extract<Step,{kind:'delay'}>;copy:Copy;locked:boolean;onChange:(delay:number,lateness:number)=>void}){
  const [delay,setDelay]=useState(String(step.delay_ms)),[lateness,setLateness]=useState(String(step.max_lateness_ms));
@@ -39,6 +41,9 @@ export function StepEditor({text,state,disabled,copy,onChange}:{text:string;stat
    <label><input type="checkbox" checked={entry.step.required} disabled={!mayOptional||locked} onChange={e=>attempt(()=>configure(entry.step.depends_on,e.target.checked,'stop'))}/>{copy.stepRequired}</label>
    <label htmlFor="step-failure-policy">{copy.stepFailurePolicy}</label><select id="step-failure-policy" value={entry.step.failure_policy} onChange={e=>attempt(()=>configure(entry.step.depends_on,entry.step.required,e.target.value as Step['failure_policy']))}><option value="stop">{copy.stepStop}</option><option value="continue_if_independent" disabled={!mayOptional||entry.step.required||parallel}>{copy.stepContinue}</option></select>
    {entry.step.kind==='delay'&&<DelayFields key={selected+':'+generation} step={entry.step} copy={copy} locked={locked} onChange={(delay_ms,max_lateness_ms)=>attempt(()=>setWorking(editProgram(working,state,{kind:'delay',step_id:selected,delay_ms,max_lateness_ms})))}/>}
+   {content&&entry.step.kind==='action'&&<ConditionEditor key={selected+':'+generation} label={copy.stepGuard} condition={entry.step.guard}
+    sources={conditionSources(content,state,{kind:'step-guard',step_id:selected})} copy={copy} locked={locked}
+    onEdit={condition=>attempt(()=>setWorking(editProgram(working,state,{kind:'step-guard',step_id:selected,condition})))}/>}
    <label htmlFor="move-step-container">{copy.moveStepContainer}</label><select id="move-step-container" value={destination} onChange={e=>setDestination(e.target.value)}><option value="">{copy.stepContainer}</option>{containers.map(c=><option key={c.path} value={c.path}>{labels.get(c.path)}</option>)}</select>
    <label htmlFor="move-step-position">{copy.moveStepPosition}</label><input id="move-step-position" type="number" min={1} step={1} value={position} onChange={e=>setPosition(e.target.value)}/><button disabled={locked||!destination||position===''} onClick={()=>attempt(()=>setWorking(editProgram(working,state,{kind:'relocate',step_id:selected,container:destination,index:Number(position)-1})))}>{copy.relocateStep}</button><p className="muted">{copy.relocateHint}</p>
   </fieldset>}
