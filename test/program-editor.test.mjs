@@ -12,6 +12,21 @@ function fixture(){
 }
 const transition=(id,extra={})=>({transition_id:id,from_state:'idle',to_state:'running',priority:0,trigger_binding_id:'trigger',condition:{kind:'literal',value:true},exit:[],transition:[],enter:[],...extra});
 const machine=f=>{f.content.program={kind:'state_machine',states:['idle','running'],initial_state:'idle',transitions:[transition('start',{exit:[step('first')],enter:[step('second')]})]};return f;};
+test('规则触发器只采用当前批准且精确选择的事件，修改保留原条件和步骤',()=>{
+ const f=fixture(),alternate=input('alternate'),selection={kind:'input',binding_id:alternate.binding_id,content_ref:ref};
+ f.state.bindingApproval.bundle.bindings.push({...selection,value:alternate});
+ const change={kind:'rule-trigger',trigger_binding_id:alternate.binding_id};
+ assert.throws(()=>f.edit(change),{code:'stepEditSource'});
+ f.content.selections.push(selection);
+ const original=f.text(),preview=f.edit(change),updated=JSON.parse(preview);
+ assert.deepEqual(updated,{...f.content,program:{...f.content.program,trigger_binding_id:'alternate'}});
+ compileProgram({...f.model,input_bindings:[...f.model.input_bindings,alternate],program:updated.program});
+ assert.equal(f.text(),original);
+ assert.equal(applyProgramPreview(original,preview,f.state),preview);
+ assert.throws(()=>applyProgramPreview(original,preview,{...f.state,bindingHistorical:true}),{code:'stepEditSource'});
+ alternate.source='observation';assert.throws(()=>f.edit(change),{code:'stepEditSource'});
+ assert.throws(()=>machine(f).edit(change),{code:'stepEditInvalid'});
+});
 test('规则组新增、模式、重排、删除与跨组移动保持文档并由实际编译器接纳',()=>{
  const f=fixture(),original=f.text();let text=f.edit({kind:'group-add',mode:'parallel',step:delay('wait')});
  text=f.edit({kind:'relocate',step_id:'second',container:'/program/groups/1/steps',index:0},text);

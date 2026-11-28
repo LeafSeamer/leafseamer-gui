@@ -9,6 +9,7 @@ import type {Step} from './step-editor.ts';
 
 type Mode='sequence'|'parallel';
 export type ProgramEdit=
+ |{kind:'rule-trigger';trigger_binding_id:string}
  |{kind:'group-add';mode:Mode;step:Step}
  |{kind:'group-remove';index:number}
  |{kind:'group-move';index:number;direction:-1|1}
@@ -40,7 +41,10 @@ export function applyProgramPreview(base:string,preview:string,state:Snapshot):s
 export function editProgram(text:string,state:Snapshot,edit:ProgramEdit):string{
  need(!state.busy&&!state.draftHistorical&&!state.draftRecovery&&!state.bindingRecovery&&!state.bindingPreparation,'stepEditStale');
  const content=parseSelectionContent(text),p=content.program;let program:DraftContent['program']=p;
- if(edit.kind==='group-add'||edit.kind==='group-remove'||edit.kind==='group-move'||edit.kind==='group-mode'){
+ if(edit.kind==='rule-trigger'){
+  if(p.kind!=='rule')throw new StepEditError('stepEditInvalid');
+  program={...p,trigger_binding_id:edit.trigger_binding_id};
+ }else if(edit.kind==='group-add'||edit.kind==='group-remove'||edit.kind==='group-move'||edit.kind==='group-mode'){
   need(p.kind==='rule');if(p.kind!=='rule')throw new StepEditError('stepEditInvalid');const groups=[...p.groups];
   if(edit.kind==='group-add'){
    const step=edit.step;if(step.kind==='action')need(selectedActionSources(content,state).some(b=>b.kind==='action'&&b.binding_id===step.action_binding_id),'stepEditSource');

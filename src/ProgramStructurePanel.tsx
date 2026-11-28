@@ -26,7 +26,19 @@ function TransitionFields({content,state,copy,locked,onEdit,current}:Props&{curr
 }
 export function ProgramStructurePanel(props:Props){
  const {content,copy,locked,onEdit}=props,p=content.program,[stateName,setStateName]=useState(''),[transition,setTransition]=useState('');
- if(p.kind==='rule')return <details className="program-structure"><summary>{copy.ruleGroups}</summary><p className="muted">{copy.groupManagementHint}</p><ol className="group-list">{p.groups.map((g,i)=><li key={i} data-group-index={i}><strong>{copy.ruleGroup} {i+1} · {g.steps.length} {copy.stepCount}</strong><select aria-label={copy.groupMode+' '+(i+1)} value={g.mode} disabled={locked} onChange={e=>onEdit({kind:'group-mode',index:i,mode:e.target.value as 'sequence'|'parallel'})}><option value="sequence">{copy.stepsSequence}</option><option value="parallel">{copy.stepsParallel}</option></select><div className="actions"><button disabled={locked||i===0} onClick={()=>onEdit({kind:'group-move',index:i,direction:-1})}>{copy.moveGroupUp}</button><button disabled={locked||i===p.groups.length-1} onClick={()=>onEdit({kind:'group-move',index:i,direction:1})}>{copy.moveGroupDown}</button><button disabled={locked||p.groups.length===1} onClick={()=>onEdit({kind:'group-remove',index:i})}>{copy.removeGroup}</button></div></li>)}</ol></details>;
+ if(p.kind==='rule'){
+  const events=selectedEventSources(content,props.state),trigger=p.trigger_binding_id;
+  const currentApproved=events.some(event=>event.binding_id===trigger);
+  return <details className="program-structure"><summary>{copy.ruleSettings}</summary>
+   <label htmlFor="rule-trigger">{copy.transitionTrigger}</label>
+   <select id="rule-trigger" value={trigger} disabled={locked||events.length===0} onChange={event=>onEdit({kind:'rule-trigger',trigger_binding_id:event.target.value})}>
+    {!currentApproved&&<option value={trigger}>{copy.actionUnverified}: {trigger}</option>}
+    {events.map(event=><option key={event.binding_id} value={event.binding_id}>{event.binding_id}</option>)}
+   </select>
+   {events.length===0&&<p className="muted">{copy.noEventSources}</p>}
+   <p className="muted">{copy.groupManagementHint}</p><ol className="group-list" aria-label={copy.ruleGroups}>{p.groups.map((g,i)=><li key={i} data-group-index={i}><strong>{copy.ruleGroup} {i+1} · {g.steps.length} {copy.stepCount}</strong><select aria-label={copy.groupMode+' '+(i+1)} value={g.mode} disabled={locked} onChange={e=>onEdit({kind:'group-mode',index:i,mode:e.target.value as 'sequence'|'parallel'})}><option value="sequence">{copy.stepsSequence}</option><option value="parallel">{copy.stepsParallel}</option></select><div className="actions"><button disabled={locked||i===0} onClick={()=>onEdit({kind:'group-move',index:i,direction:-1})}>{copy.moveGroupUp}</button><button disabled={locked||i===p.groups.length-1} onClick={()=>onEdit({kind:'group-move',index:i,direction:1})}>{copy.moveGroupDown}</button><button disabled={locked||p.groups.length===1} onClick={()=>onEdit({kind:'group-remove',index:i})}>{copy.removeGroup}</button></div></li>)}</ol>
+  </details>;
+ }
  return <details className="program-structure"><summary>{copy.statesAndTransitions}</summary><p className="muted">{copy.stateManagementHint}</p>
   <label htmlFor="initial-state">{copy.initialState}</label><select id="initial-state" disabled={locked} value={p.initial_state} onChange={e=>onEdit({kind:'state-initial',name:e.target.value})}>{p.states.map(s=><option key={s} value={s}>{s}</option>)}</select>
   <ul className="state-list">{p.states.map(s=><li key={s}><span>{s}</span><button disabled={locked||s===p.initial_state||p.transitions.some(t=>t.from_state===s||t.to_state===s)} onClick={()=>onEdit({kind:'state-remove',name:s})}>{copy.removeState}</button></li>)}</ul>
