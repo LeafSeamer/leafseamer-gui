@@ -1,6 +1,12 @@
 export const translations = {
   zh: {
     ruleSettings:'规则设置',
+    capacity:'服务容量已达上限。容量恢复后可重新发起。',
+    draftConflictContent:'草稿内容修订冲突', draftConflictMetadata:'草稿元数据修订冲突',
+    draftConflictHint:'已暂停保存。对照编辑所用的基准、本地修改和服务端当前版本。确认采用当前修订后，再手动保存。',
+    draftConflictBase:'编辑基准', draftConflictCurrent:'服务端当前版本', draftConflictLocal:'本地编辑',
+    draftConflictShow:'展开查看内容和元数据', draftConflictMetadataLabel:'元数据', draftConflictRead:'读取服务端当前版本',
+    draftConflictKeep:'保留本地修改并采用当前修订', draftConflictDiscard:'丢弃本地修改并载入当前版本',
     ruleCondition:'规则条件', transitionCondition:'转换条件', stepGuard:'动作执行条件',
     conditionKind:'条件类型', conditionLiteral:'常量', conditionCompare:'比较', conditionAll:'全部满足', conditionAny:'至少一项满足',
     conditionNot:'取反', conditionExists:'值存在', conditionNull:'值为 null', conditionTrue:'真（true）', conditionFalse:'假（false）',
@@ -58,6 +64,12 @@ recovery_cleanup:"原结果已确认，但本页查原身份未能清理；保�
     logout_pending: '本地会话已撤销；远端撤销传播仍待确认。', logout_unconfirmed: '已清除本页凭据；服务端退出结果尚未确认。', local_cleared: '已清除本页凭据，未执行服务端注销。'},
   en: {
     ruleSettings:'Rule settings',
+    capacity:'The service is at capacity. Submit again when capacity becomes available.',
+    draftConflictContent:'Draft content revision conflict', draftConflictMetadata:'Draft metadata revision conflict',
+    draftConflictHint:'Saving is paused. Compare your editing baseline, local changes, and the current version on the service. Adopt the current revision before saving again.',
+    draftConflictBase:'Editing baseline', draftConflictCurrent:'Current version on the service', draftConflictLocal:'Local edits',
+    draftConflictShow:'Show content and metadata', draftConflictMetadataLabel:'Metadata', draftConflictRead:'Read current version from the service',
+    draftConflictKeep:'Keep local edits and adopt current revision', draftConflictDiscard:'Discard local edits and load current version',
     ruleCondition:'Rule condition', transitionCondition:'Transition condition', stepGuard:'Action guard',
     conditionKind:'Condition type', conditionLiteral:'Constant', conditionCompare:'Compare', conditionAll:'Match all', conditionAny:'Match any',
     conditionNot:'Negate', conditionExists:'Value exists', conditionNull:'Value is null', conditionTrue:'True', conditionFalse:'False',

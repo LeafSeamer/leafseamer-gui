@@ -6,7 +6,7 @@ import {createBindingActions} from './binding-actions.ts';
 import type {BindingCandidate,BindingApproval,BindingPreparation,BindingRecovery} from './binding-actions.ts';
 import {createDraftActions} from './draft-actions.ts';
 import type {RunView} from './draft-actions.ts';
-import type {DraftRecord,DraftRecovery,PublishedVersion,PublicationPreparation,PublicationHistory,PublicationProof} from './draft-actions.ts';
+import type {DraftConflict,DraftRecord,DraftRecovery,PublishedVersion,PublicationPreparation,PublicationHistory,PublicationProof} from './draft-actions.ts';
 import {createObsActions} from './obs-actions.ts';
 import type {ObsCommand,SceneCatalog} from './obs-actions.ts';
 import {createStatusSubscription, emptyStatusProjection} from './status-subscription.ts';
@@ -21,17 +21,17 @@ export type EvidencePage = Extract<Results['controller']['getCommandEvidence'], 
 import type {Site} from './site.ts';
 export {validateSite} from './site.ts';
 export type {Site} from './site.ts';
-export type Notice = 'binding_pending' | 'binding_not_found' | 'invalid_binding' | 'recovery_cleanup' | 'invalid_draft' | 'draft_pending' | 'draft_not_found' | 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_run' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
+export type Notice = 'binding_pending' | 'binding_not_found' | 'invalid_binding' | 'recovery_cleanup' | 'invalid_draft' | 'draft_pending' | 'draft_not_found' | 'unauthorized' | 'forbidden' | 'unavailable' | 'incompatible' | 'network' | 'stale' | 'capacity' | 'not_found' | 'expired_view' | 'invalid_command' | 'invalid_run' | 'invalid_control' | 'recovery_unavailable' | 'logout_pending' | 'logout_unconfirmed' | 'local_cleared';
 export type Snapshot = Readonly<{busy: boolean; session: Session | null; loginLabel: string; devices: readonly Device[]; selected: string | null;
   obsCatalog:SceneCatalog|null;obsCommand:ObsCommand|null;statusProjection:StatusProjection;
-  bindingCandidate:BindingCandidate|null;bindingApproval:BindingApproval|null;bindingPreparation:BindingPreparation|null;bindingRecovery:BindingRecovery|null;bindingHistorical:boolean;capabilities:Capabilities|null;capabilitiesReadAt:string|null;draft:DraftRecord|null;draftRecovery:DraftRecovery|null;draftHistorical:boolean;publicationPreparation:PublicationPreparation|null;publishedVersion:PublishedVersion|null;publicationHistory:PublicationHistory|null;publicationProof:PublicationProof|null;runView:RunView|null;control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
+  bindingCandidate:BindingCandidate|null;bindingApproval:BindingApproval|null;bindingPreparation:BindingPreparation|null;bindingRecovery:BindingRecovery|null;bindingHistorical:boolean;capabilities:Capabilities|null;capabilitiesReadAt:string|null;draft:DraftRecord|null;draftRecovery:DraftRecovery|null;draftConflict:DraftConflict|null;draftHistorical:boolean;publicationPreparation:PublicationPreparation|null;publishedVersion:PublishedVersion|null;publicationHistory:PublicationHistory|null;publicationProof:PublicationProof|null;runView:RunView|null;control: Control | null; controlAction: ControlActionState | null; command: Command | null; evidence: EvidencePage | null; catalogRevision: string | null; lastRead: string | null; notice: Notice | null}>;
 const empty = (): Snapshot => Object.freeze({busy: false, session: null, loginLabel: '', devices: Object.freeze([]), selected: null,
   obsCatalog:null,obsCommand:null,statusProjection:emptyStatusProjection,
-  bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
+  bindingCandidate:null,bindingApproval:null,bindingPreparation:null,bindingRecovery:null,bindingHistorical:false,capabilities:null,capabilitiesReadAt:null,draft:null,draftRecovery:null,draftConflict:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,runView:null,control: null, controlAction: null, command: null, evidence: null, catalogRevision: null, lastRead: null, notice: null});
 class Rejected extends Error { code: Notice; constructor(code: Notice) { super(code); this.code = code; } }
 function accept(status: string, expected: string): void {
   if (status === expected) return;
-  throw new Rejected(status === '401' ? 'unauthorized' : status === '403' ? 'forbidden' : status === '404' ? 'not_found' : status === '410' ? 'expired_view' : status === '409' ? 'stale' :
+  throw new Rejected(status === '401' ? 'unauthorized' : status === '403' ? 'forbidden' : status === '404' ? 'not_found' : status === '410' ? 'expired_view' : status === '409' ? 'stale' : status === '429' ? 'capacity' :
     ['400','406','415','422'].includes(status) ? 'incompatible' : 'unavailable');
 }
 // 生命周期独立于React；组件重挂载不发请求，所有操作只由显式用户事件调用。
@@ -44,7 +44,7 @@ export function createSessionManager(site: Site, client: BrowserSessionClient = 
   const resetEvidence = () => { evidenceCursors.clear(); evidenceIds.clear(); };
   const sameScope = (scope: Command['scope']) => scope.authority_service_id === audience && scope.database_instance_id === database;
   const sameRef = (a: Command['state_ref'], b: Command['state_ref']) => a.id === b.id && a.revision === b.revision && a.digest === b.digest;
-  const publish = (patch: Partial<Snapshot>) => { current = Object.freeze({...current,...(Object.hasOwn(patch,'draft')&&patch.draft?.definition_id!==current.draft?.definition_id?{bindingCandidate:null,bindingPreparation:null}:{}), ...patch}); for (const fn of listeners) fn(); };
+  const publish = (patch: Partial<Snapshot>) => { current = Object.freeze({...current,...(Object.hasOwn(patch,'draft')&&patch.draft?.definition_id!==current.draft?.definition_id?{bindingCandidate:null,bindingPreparation:null,draftConflict:null}:{}), ...patch}); for (const fn of listeners) fn(); };
   const clearLocal = (notice: Notice | null = 'local_cleared', preserveRecovery = false) => { generation++; tokenScopes = []; tokenExpires = 0; resetEvidence(); controlActions.reset(preserveRecovery); obsActions.reset(preserveRecovery||current.obsCommand!==null); statusSubscription.reset(); client.clearLocalState(); current = empty(); publish({notice}); };
   async function action(run: (alive: () => void) => Promise<void>) {
     if (current.busy) return;

@@ -5,6 +5,8 @@ import type {Notice,Session,Site,Snapshot} from './session.ts';
 import type {RecoveryStorage} from './control-actions.ts';
 import {createDirectedToken} from './directed-token.ts';
 export type DraftRecord=Extract<Results['seamer']['getDraft'],{status:'200'}>['body'];
+type UpdateOperation='updateDraft'|'updateDefinitionMetadata';
+export type DraftConflict=Readonly<{operation:UpdateOperation;base:DraftRecord;current:DraftRecord|null}>;
 type RunRecord=Extract<Results['seamer']['getRun'],{status:'200'}>['body'];
 export type RunView=Readonly<{record:RunRecord;readAt:string;source:'query'|'creation'}>;
 type Content=Inputs['seamer']['createDefinition']['body']['content'];
@@ -88,10 +90,16 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
   publish({runView:{record:value,source:'creation',readAt:new Date().toISOString()}});
  }
  function parse(text:string):Content{try{if(new TextEncoder().encode(text).length>4194304)throw new Error('size');const v=JSON.parse(text);validateAutomationModel('LifecycleDraftContent',v);return v;}catch{return fail('invalid_draft');}}
- async function write(operation:Exclude<DraftChangeOperation,'publishDefinition'|'createRun'>,text:string|null,metadata:Metadata|null,alive:()=>void){
+ async function write(operation:Exclude<DraftChangeOperation,'publishDefinition'|'createRun'>,text:string|null,metadata:Metadata|null,alive:()=>void,base?:DraftRecord){
   if(corrupt)fail('recovery_unavailable');if(state().draftRecovery)fail('draft_pending');
+  if(state().draftConflict)fail('stale');
   publish({publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});
   const draft=state().draft;if(operation!=='createDefinition'&&(!draft||state().draftHistorical))fail('stale');
+  if(base&&draft&&operation!=='createDefinition'){
+   record(base,draft.definition_id);
+   const field=operation==='updateDraft'?'revision':'metadata_revision';
+   if(base[field]!==draft[field]){publish({draftConflict:{operation,base,current:draft}});return;}
+  }
   const content=text===null?null:parse(text);
   try{if(metadata)validateAutomationModel('LifecycleDefinitionMetadata',metadata);}catch{fail('invalid_draft');}
   await token(['definition.edit','definition.read','request.create','request.read'],alive);
@@ -103,7 +111,14 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
   if(prepared.operation==='publishDefinition'||prepared.operation==='createRun')return fail('incompatible');
   save({format:'leafseamer.gui.draft-request/1',scope:scope!,actor:actor(s),request_epoch:context.context_epoch,definition_id:prepared.definition_id,lookup:prepared.lookup,request_digest:prepared.request_digest});
   const result=prepared.operation==='createDefinition'?await ready().createDefinition(prepared.body):prepared.operation==='updateDraft'?await ready().updateDraft(prepared.definition_id,prepared.body):await ready().updateDefinitionMetadata(prepared.definition_id,prepared.body);
-  alive();accept(result.status,operation==='createDefinition'?'201':'200');if(result.status!=='200'&&result.status!=='201')return;
+  alive();
+  if(result.status==='409'&&result.body.code==='REVISION_CONFLICT'&&operation!=='createDefinition'&&draft){
+   finish();publish({draftConflict:{operation,base:base??draft,current:null}});return;
+  }
+  if(result.status==='429'&&result.body.code==='CAPACITY_EXCEEDED'){
+   finish();return fail('capacity');
+  }
+  accept(result.status,operation==='createDefinition'?'201':'200');if(result.status!=='200'&&result.status!=='201')return;
   const value=record(result.body,prepared.definition_id);
   if(operation==='createDefinition'?(value.revision!=='1'||value.metadata_revision!=='1'):operation==='updateDraft'?BigInt(value.revision)!==BigInt(draft!.revision)+1n:BigInt(value.metadata_revision)!==BigInt(draft!.metadata_revision)+1n)fail('incompatible');
   publish({draft:value,draftHistorical:false});finish();
@@ -141,13 +156,32 @@ export function createDraftActions({site,client,storage,state,publish,action,acc
    alive();accept(response.status,'201');
    if(response.status==='201'){adoptRunCreation(response.body,expected);finish();}
   });},
-  readDraft(definition:string){return action(async alive=>{if(!id(definition))fail('invalid_draft');publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});await token(['definition.read'],alive);const response=await ready().getDraft(definition);alive();accept(response.status,'200');if(response.status==='200')publish({draft:record(response.body,definition)});});},
-  newDraft(){if(!state().busy&&!state().draftRecovery)publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,notice:null});},
+  readDraft(definition:string){return action(async alive=>{if(!id(definition))fail('invalid_draft');if(state().draftConflict)fail('stale');publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null});await token(['definition.read'],alive);const response=await ready().getDraft(definition);alive();accept(response.status,'200');if(response.status==='200')publish({draft:record(response.body,definition)});});},
+  newDraft(){if(!state().busy&&!state().draftRecovery&&!state().draftConflict)publish({draft:null,draftHistorical:false,publicationPreparation:null,publishedVersion:null,publicationHistory:null,publicationProof:null,notice:null});},
   createDraft(text:string,name:string,description:string){return action(alive=>write('createDefinition',text,{name,description,layout:{}},alive));},
-  saveDraft(text:string){return action(alive=>write('updateDraft',text,null,alive));},
-  renameDraft(name:string,description:string){return action(alive=>write('updateDefinitionMetadata',null,{name,description,layout:state().draft?.metadata.layout??{}},alive));},
+  saveDraft(text:string,base?:DraftRecord){return action(alive=>write('updateDraft',text,null,alive,base));},
+  renameDraft(name:string,description:string,base?:DraftRecord){return action(alive=>write('updateDefinitionMetadata',null,{name,description,layout:base?.metadata.layout??state().draft?.metadata.layout??{}},alive,base));},
+  readDraftConflict(){return action(async alive=>{
+   const conflict=state().draftConflict;if(!conflict||state().draftRecovery)return fail('stale');
+   await token(['definition.read'],alive);
+   const result=await ready().getDraft(conflict.base.definition_id);alive();accept(result.status,'200');if(result.status!=='200')return;
+   const current=record(result.body,conflict.base.definition_id),known=conflict.current??state().draft??conflict.base;
+   if(BigInt(current.revision)<BigInt(known.revision)||BigInt(current.metadata_revision)<BigInt(known.metadata_revision)||
+    current.revision===known.revision&&(current.content_digest!==known.content_digest||current.selection_digest!==known.selection_digest))return fail('incompatible');
+   if(current.metadata_revision===known.metadata_revision){
+    const [received,expected]=await Promise.all([digestAutomationValue(current.metadata),digestAutomationValue(known.metadata)]);alive();
+    if(received!==expected)return fail('incompatible');
+   }
+   publish({draftConflict:{...conflict,current}});
+  });},
+  adoptDraftConflict(){
+   const {draft,draftConflict,busy,draftRecovery,draftHistorical}=state();
+   const current=draftConflict?.current;
+   if(busy||draftRecovery||draftHistorical||!current||current.definition_id!==draft?.definition_id)return null;
+   publish({draft:current,draftConflict:null,notice:null});return current;
+  },
   preparePublication(){return action(async()=>{
-   if(corrupt)fail('recovery_unavailable');if(state().draftRecovery)fail('draft_pending');const draft=state().draft;if(!draft||state().draftHistorical)return fail('stale');
+   if(corrupt)fail('recovery_unavailable');if(state().draftRecovery)fail('draft_pending');const draft=state().draft;if(!draft||state().draftHistorical||state().draftConflict)return fail('stale');
    publish({publicationPreparation:{definition_id:draft.definition_id,revision:draft.revision,content_digest:draft.content_digest,selection_digest:draft.selection_digest},publishedVersion:null,publicationHistory:null,publicationProof:null});
   });},
   cancelPublication(){if(!state().busy)publish({publicationPreparation:null});},

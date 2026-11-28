@@ -7,13 +7,13 @@ for(const name of ['playwright','browser','output'])assert.ok(path.isAbsolute(co
 const {chromium}=createRequire(import.meta.url)(config.playwright);
 fs.mkdirSync(config.output,{recursive:true});
 const browser=await chromium.launch({executablePath:config.browser,headless:true,args:['--ignore-certificate-errors-spki-list='+config.spkis.join(',')]});
-const checks=[],errors=[],consoleErrors=[],requests=[],responses=[];let deliberateLoss=false,page;
+const checks=[],errors=[],consoleErrors=[],requests=[],responses=[],expectedConflicts=new Set();let deliberateLoss=false,page;
 try{
  const context=await browser.newContext({viewport:{width:1440,height:1000},locale:'zh-CN'});page=await context.newPage();page.setDefaultTimeout(10000);
  page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(['error','warning'].includes(message.type()))consoleErrors.push({text:message.text(),url:message.location().url,intentionalLoss:deliberateLoss});});
  page.on('request',request=>requests.push({method:request.method(),url:request.url()}));page.on('response',response=>responses.push({method:response.request().method(),path:new URL(response.url()).pathname,status:response.status()}));
  const landing=await page.goto(config.origin);assert.equal(landing.status(),200);assert.ok(landing.headers()['content-security-policy'].includes("connect-src 'self' "+config.seamerOrigin));assert.equal(await page.locator('vite-error-overlay').count(),0);
- async function login(){await page.getByLabel('用户名',{exact:true}).fill('role.test');await page.getByLabel('密码',{exact:true}).fill('Synthetic-role-password-123');await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('button',{name:'退出登录',exact:true}).waitFor();await page.getByRole('button',{name:'自动化',exact:true}).click();await page.getByRole('heading',{name:'绑定批准',exact:true}).waitFor();}
+ async function login(target=page){await target.getByLabel('用户名',{exact:true}).fill('role.test');await target.getByLabel('密码',{exact:true}).fill('Synthetic-role-password-123');await target.getByRole('button',{name:'登录',exact:true}).click();await target.getByRole('button',{name:'退出登录',exact:true}).waitFor();await target.getByRole('button',{name:'自动化',exact:true}).click();await target.getByRole('heading',{name:'绑定批准',exact:true}).waitFor();}
  await login();await page.getByLabel('名称',{exact:true}).fill('浏览器绑定定义');await page.getByLabel('描述',{exact:true}).fill('合成来源绑定验收');await page.getByLabel('定义内容文档',{exact:true}).fill(JSON.stringify(config.content));await page.getByRole('button',{name:'创建草稿',exact:true}).click();await page.getByRole('heading',{name:'草稿信息',exact:true}).waitFor();
  const pane=page.locator('.binding-pane'),prepare=()=>pane.getByRole('button',{name:'准备批准来源',exact:true}),writes=()=>requests.filter(r=>r.method==='POST'&&/\/binding-approvals(?:\/[^/]+\/revoke)?$/.test(r.url)).length;
  assert.equal(await pane.locator('#binding-device option').count(),1);assert.equal(await pane.locator('#binding-device option').innerText(),'内存模拟器');
@@ -116,6 +116,59 @@ try{
  await stepsPane.screenshot({path:path.join(config.output,'state-machine-desktop.png')});await page.getByRole('button',{name:'English',exact:true}).click();await page.getByRole('button',{name:'Switch theme',exact:true}).click();await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await stepsPane.screenshot({path:path.join(config.output,'state-machine-mobile.png')});await page.getByRole('button',{name:'简体中文',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();await page.setViewportSize({width:1440,height:1000});
  await page.getByRole('button',{name:'保存定义内容',exact:true}).click();await page.waitForFunction(()=>[...document.querySelectorAll('.fact')].some(e=>e.textContent==='内容修订3'));await page.locator('#definition-id').fill(approvedDocument.definition_id);await page.locator('.draft-pane>.command-search').getByRole('button',{name:'查询',exact:true}).click();await page.getByRole('heading',{name:'草稿信息',exact:true}).waitFor();assert.deepEqual(JSON.parse(await document.inputValue()),selected);
  checks.push('真实状态机预览及HTTPS保存读回：状态、转换端点、优先级、跨阶段移动和取反条件，保留触发器');
+ const secondContext=await browser.newContext({viewport:{width:1440,height:1000},locale:'zh-CN'}),second=await secondContext.newPage();
+ second.setDefaultTimeout(10000);second.on('pageerror',error=>errors.push(error.message));
+ try{
+  await second.goto(config.origin);await login(second);
+  await second.locator('#definition-id').fill(approvedDocument.definition_id);
+  await second.locator('.draft-pane>.command-search').getByRole('button',{name:'查询',exact:true}).click();
+  await second.getByRole('heading',{name:'草稿信息',exact:true}).waitFor();
+  const local=structuredClone(selected),other=structuredClone(selected);
+  local.program.transitions[0].condition={kind:'literal',value:false};other.program.transitions[0].priority=12;
+  await document.fill(JSON.stringify(local));await page.getByLabel('名称',{exact:true}).fill('保留未保存名称');
+  await second.locator('#draft-content').fill(JSON.stringify(other));
+  await second.getByRole('button',{name:'保存定义内容',exact:true}).click();
+  await second.getByText('内容修订4',{exact:true}).waitFor();
+  const rejection=page.waitForResponse(response=>response.status()===409&&new URL(response.url()).origin===config.seamerOrigin);
+  await page.getByRole('button',{name:'保存定义内容',exact:true}).click();
+  const contentConflict=await rejection;assert.equal((await contentConflict.json()).code,'REVISION_CONFLICT');expectedConflicts.add(contentConflict.url());
+  const conflict=page.locator('.draft-conflict');await conflict.getByRole('heading',{name:'草稿内容修订冲突',exact:true}).waitFor();
+  assert.deepEqual(JSON.parse(await document.inputValue()),local);
+  assert.equal(await page.getByRole('button',{name:'保存定义内容',exact:true}).isDisabled(),true);
+  assert.equal(await page.getByRole('button',{name:'查询原请求',exact:true}).count(),0);
+  await conflict.getByRole('button',{name:'读取服务端当前版本',exact:true}).click();
+  await conflict.getByRole('heading',{name:'服务端当前版本',exact:true}).waitFor();
+  const cards=conflict.locator('.draft-comparison');
+  for(const [index,value] of [selected,other,local].entries()){
+   await cards.nth(index).locator('summary').click();assert.deepEqual(JSON.parse(await cards.nth(index).locator('pre').first().textContent()),value);
+  }
+  await conflict.screenshot({path:path.join(config.output,'draft-conflict-desktop.png')});
+  const beforeResolve=requests.length;
+  await conflict.getByRole('button',{name:'保留本地修改并采用当前修订',exact:true}).click();
+  await conflict.waitFor({state:'hidden'});assert.equal(requests.length,beforeResolve);
+  assert.deepEqual(JSON.parse(await document.inputValue()),local);
+  local.program.transitions[0].priority=other.program.transitions[0].priority;await document.fill(JSON.stringify(local));
+  await page.getByRole('button',{name:'保存定义内容',exact:true}).click();await page.getByText('内容修订5',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('名称',{exact:true}).inputValue(),'保留未保存名称');
+  selected=JSON.parse(await document.inputValue());assert.deepEqual(selected,local);
+  await second.getByLabel('名称',{exact:true}).fill('另一窗口保存的名称');
+  await second.getByRole('button',{name:'保存名称与描述',exact:true}).click();await second.getByText('信息修订2',{exact:true}).waitFor();
+  const metadataRejection=page.waitForResponse(response=>response.status()===409&&new URL(response.url()).origin===config.seamerOrigin);
+  await page.getByRole('button',{name:'保存名称与描述',exact:true}).click();
+  const metadataConflict=await metadataRejection;assert.equal((await metadataConflict.json()).code,'REVISION_CONFLICT');expectedConflicts.add(metadataConflict.url());
+  await conflict.getByRole('heading',{name:'草稿元数据修订冲突',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('名称',{exact:true}).inputValue(),'保留未保存名称');
+  await conflict.getByRole('button',{name:'读取服务端当前版本',exact:true}).click();
+  await conflict.getByRole('heading',{name:'服务端当前版本',exact:true}).waitFor();
+  await page.getByRole('button',{name:'English',exact:true}).click();await page.getByRole('button',{name:'Switch theme',exact:true}).click();
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await conflict.screenshot({path:path.join(config.output,'draft-conflict-mobile.png')});
+  await page.getByRole('button',{name:'简体中文',exact:true}).click();await page.getByRole('button',{name:'切换主题',exact:true}).click();await page.setViewportSize({width:1440,height:1000});
+  await conflict.getByRole('button',{name:'丢弃本地修改并载入当前版本',exact:true}).click();await conflict.waitFor({state:'hidden'});
+  assert.equal(await page.getByLabel('名称',{exact:true}).inputValue(),'另一窗口保存的名称');
+  assert.deepEqual(JSON.parse(await document.inputValue()),selected);
+  checks.push('双浏览器窗口的真实内容及元数据修订冲突，保留本地草稿并对照三个版本，明确采用当前修订后手动重交');
+ }finally{await secondContext.close();}
  const beforeRevoke=requests.length;await pane.getByRole('button',{name:'准备撤销批准',exact:true}).click();await pane.getByRole('button',{name:'取消准备',exact:true}).click();assert.equal(requests.length,beforeRevoke);
  await pane.getByRole('button',{name:'准备撤销批准',exact:true}).click();await pane.getByRole('button',{name:'确认撤销批准',exact:true}).click();await pane.getByText('本地批准已撤销，运行保护完成状态尚未确认。',{exact:true}).waitFor();assert.equal(writes(),2);checks.push('真实HTTPS批准、读取当前版本、二次确认撤销');
  assert.equal(await choices.count(),0);assert.deepEqual(JSON.parse(await document.inputValue()),selected);
@@ -129,6 +182,6 @@ try{
  const writeCount=writes();await pane.getByRole('button',{name:'查询原批准请求',exact:true}).click();await pane.getByRole('heading',{name:'原请求的历史结果',exact:true}).waitFor();assert.equal(writes(),writeCount);assert.equal(await pane.getByRole('button',{name:'准备撤销批准',exact:true}).isDisabled(),true);assert.ok((await pane.locator('.binding-current').innerText()).includes(committed.approval_ref.id));
  await pane.locator('.binding-current').getByRole('button',{name:'读取当前批准',exact:true}).click();await pane.getByRole('heading',{name:'最近读取的批准',exact:true}).waitFor();assert.equal(await pane.getByRole('button',{name:'准备撤销批准',exact:true}).isDisabled(),false);assert.equal(writes(),writeCount);checks.push('真实提交后丢失响应，重载登录仅查原；历史不能撤销，重新读取当前状态才可准备');
  deliberateLoss=false;assert.deepEqual(await page.evaluate(()=>({cookie:document.cookie,session:Object.keys(sessionStorage)})),{cookie:'',session:[]});assert.deepEqual(errors,[]);
- const bad=consoleErrors.filter(e=>!e.url.endsWith('/favicon.ico')&&!(e.intentionalLoss&&e.url.startsWith(config.seamerOrigin+'/api/v1/definitions/')&&e.url.endsWith('/binding-approvals')&&/ERR_FAILED|Failed to fetch/.test(e.text)));assert.deepEqual(bad,[]);
+ const bad=consoleErrors.filter(e=>!e.url.endsWith('/favicon.ico')&&!(expectedConflicts.has(e.url)&&/\b409\b/.test(e.text))&&!(e.intentionalLoss&&e.url.startsWith(config.seamerOrigin+'/api/v1/definitions/')&&e.url.endsWith('/binding-approvals')&&/ERR_FAILED|Failed to fetch/.test(e.text)));assert.deepEqual(bad,[]);
  fs.writeFileSync(path.join(config.output,'checks.json'),JSON.stringify({checks,actual_https:true,synthetic_registration:true,synthetic_first_bootstrap:true,intentional_response_loss:true,errors,consoleErrors},null,2));console.log(JSON.stringify({browser:'Edge',checks:checks.length,actual_https:true,synthetic_registration:true}));
 }catch(error){if(page){await page.screenshot({path:path.join(config.output,'binding-failure.png'),fullPage:true}).catch(()=>{});fs.writeFileSync(path.join(config.output,'failure.json'),JSON.stringify({responses,errors,consoleErrors,text:await page.locator('body').innerText().catch(()=>'unavailable')},null,2));}console.error(JSON.stringify({name:error.name,message:error.message,completed:checks,at:error.stack?.split('\n').find(line=>line.trim().startsWith('at ')&&line.includes('seamer-binding-browser-check'))}));process.exitCode=1;}finally{await browser.close();}

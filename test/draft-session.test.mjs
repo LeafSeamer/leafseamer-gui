@@ -55,6 +55,45 @@ test('草稿创建绑定独立服务，成功后清理查原身份，无当前Co
  assert.equal(f.manager.getSnapshot().notice,null);assert.equal(f.manager.getSnapshot().draft.definition_id,'definition');assert.equal(f.manager.getSnapshot().draftRecovery,null);assert.equal(f.data.size,0);
  assert.deepEqual(f.calls[0],['token',['definition.edit','definition.read','request.create','request.read']]);
 });
+test('已拒绝的草稿修订保留编辑基准，读回并明确采用当前修订才可重新保存',async()=>{
+ const f=fixture();await f.manager.login('person','password');await f.manager.createDraft(JSON.stringify(content),'草稿','');
+ const base=f.manager.getSnapshot().draft,current={...base,revision:'2',content_digest:'sha256:'+'b'.repeat(64)};
+ const changes=structuredClone(content);changes.program.condition.value=false;
+ const writes=[];
+ f.remote.updateDraft=async (_definition,body)=>{writes.push(body);return {status:'409',body:{code:'REVISION_CONFLICT'}};};
+ await f.manager.saveDraft(JSON.stringify(changes),base);
+ assert.equal(f.manager.getSnapshot().draftRecovery,null);assert.equal(f.data.size,0);
+ assert.deepEqual(f.manager.getSnapshot().draftConflict,{operation:'updateDraft',base,current:null});
+ await f.manager.saveDraft(JSON.stringify(changes),base);assert.equal(writes.length,1);
+ assert.equal(f.manager.adoptDraftConflict(),null);
+ f.remote.getDraft=async()=>({status:'200',body:{...current,definition_id:'wrong'}});
+ await f.manager.readDraftConflict();assert.equal(f.manager.getSnapshot().notice,'incompatible');assert.equal(f.manager.adoptDraftConflict(),null);
+ f.remote.getDraft=async()=>({status:'200',body:current});
+ await f.manager.readDraftConflict();assert.equal(f.manager.getSnapshot().draft,base);
+ assert.equal(f.manager.adoptDraftConflict(),current);assert.equal(writes.length,1);
+ f.remote.updateDraft=async (_definition,body)=>{writes.push(body);return {status:'200',body:{...current,revision:'3',content:body.content}};};
+ await f.manager.saveDraft(JSON.stringify(changes),current);
+ assert.deepEqual(writes.map(write=>write.expected_draft_revision),['1','2']);
+ assert.notEqual(writes[0].context.idempotency_key,writes[1].context.idempotency_key);
+ assert.deepEqual(f.manager.getSnapshot().draft.content,changes);
+});
+test('保存独立修订时检测本地元数据的旧基准，容量拒绝不自动提交也不进入查原',async()=>{
+ const f=fixture();await f.manager.login('person','password');await f.manager.createDraft(JSON.stringify(content),'草稿','');
+ const base=f.manager.getSnapshot().draft;
+ const current={...base,revision:'2',metadata_revision:'2',metadata:{...base.metadata,name:'服务端名称'}};
+ f.remote.updateDraft=async()=>({status:'200',body:current});
+ await f.manager.saveDraft(JSON.stringify(content),base);
+ let writes=0;f.remote.updateDefinitionMetadata=async()=>{writes++;return {status:'429',body:{code:'CAPACITY_EXCEEDED'}};};
+ await f.manager.renameDraft('本地名称','',base);
+ assert.deepEqual(f.manager.getSnapshot().draftConflict,{operation:'updateDefinitionMetadata',base,current});assert.equal(writes,0);
+ assert.equal(f.manager.adoptDraftConflict(),current);
+ await f.manager.renameDraft('本地名称','',current);
+ assert.equal(writes,1);assert.equal(f.manager.getSnapshot().notice,'capacity');assert.equal(f.manager.getSnapshot().draft,current);
+ assert.equal(f.manager.getSnapshot().draftConflict,null);assert.equal(f.manager.getSnapshot().draftRecovery,null);assert.equal(f.data.size,0);
+ f.remote.updateDefinitionMetadata=async()=>({status:'409',body:{code:'OTHER'}});
+ await f.manager.renameDraft('本地名称','',current);
+ assert.ok(f.manager.getSnapshot().draftRecovery);assert.equal(f.data.size,1);
+});
 test('结果丢失后重新登录恢复查原，未确认前不发第二次写入，历史结果必须重新读取',async()=>{
  const f=fixture();await f.manager.login('person','synthetic-password');f.unknown();await f.manager.createDraft(JSON.stringify(content),'原草稿','描述');
  assert.equal(f.manager.getSnapshot().session,null);assert.equal(f.data.size,1);const stored=[...f.data.values()][0];assert.equal(stored.includes('policy_ref'),false);assert.equal(stored.includes('synthetic-password'),false);
